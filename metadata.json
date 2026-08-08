@@ -1,0 +1,10 @@
+{
+  "name": "Keerthi AI - Python Suite",
+  "description": "A high-performance Python-based AI voice assistant with Gemini-powered reasoning, smart home simulation, and personal productivity modules.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "python_core",
+    "gemini_integration",
+    "smart_home_engine"
+  ]
+}
