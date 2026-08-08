@@ -16,7 +16,22 @@ class TestNlpManifest(unittest.TestCase):
     def test_command_intents_keys(self):
         self.assertEqual(
             set(COMMAND_INTENTS),
-            {"LIGHT_ON", "LIGHT_OFF", "SET_TEMP", "LOCK_DOOR", "UNLOCK_DOOR", "ADD_TASK"},
+            {
+                "LIGHT_ON",
+                "LIGHT_OFF",
+                "SET_BRIGHTNESS",
+                "AC_ON",
+                "AC_OFF",
+                "SET_TEMP",
+                "FAN_ON",
+                "FAN_OFF",
+                "FAN_SPEED",
+                "LOCK_DOOR",
+                "UNLOCK_DOOR",
+                "ADD_TASK",
+                "REMOVE_TASK",
+                "STATUS_REPORT",
+            },
         )
 
 

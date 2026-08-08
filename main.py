@@ -3,11 +3,12 @@ import logging
 import os
 import sys
 import time
+from typing import Optional
 
 # Ensure the current directory is in the Python Path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from keerthi.config import CONFIG
+from keerthi.config import CONFIG, validate_config
 from keerthi.brain import KeerthiBrain
 from keerthi.executive import ExecutiveOfficer
 from keerthi.peripherals import PeripheralController, console
@@ -45,6 +46,11 @@ def parse_args() -> argparse.Namespace:
         help="Force text-input mode (disable microphone listening).",
     )
     parser.add_argument(
+        "--fresh",
+        action="store_true",
+        help="Ignore saved smart-home state and start from defaults.",
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"{CONFIG['NAME']} v{CONFIG['VERSION']}",
@@ -52,9 +58,72 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+class ConversationSession:
+    """Runs the listen-process-respond loop for a single conversation."""
+
+    def __init__(
+        self,
+        brain: KeerthiBrain,
+        officer: ExecutiveOfficer,
+        peripherals: PeripheralController,
+        use_microphone: bool = True,
+    ) -> None:
+        self.brain = brain
+        self.officer = officer
+        self.peripherals = peripherals
+        self.use_microphone = use_microphone
+
+    def run(self) -> None:
+        self.peripherals.speak(
+            f"Good day, {CONFIG['USER_NAME']}. I am KEERTHI. "
+            f"How can I facilitate your productivity today?"
+        )
+        try:
+            while True:
+                user_input = self.peripherals.listen(use_microphone=self.use_microphone)
+                if self.handle_input(user_input) == "exit":
+                    break
+        finally:
+            self.peripherals.close()
+
+    def handle_input(self, user_input: str) -> Optional[str]:
+        """Process one utterance. Returns 'exit' when the session should end."""
+        normalized = user_input.lower().strip()
+
+        if normalized in EXIT_PHRASES:
+            self.peripherals.speak(
+                f"Understood. Powering down Keerthi. Have a pleasant day, {CONFIG['USER_NAME']}."
+            )
+            return "exit"
+
+        if not normalized:
+            return None
+
+        if normalized in RESET_PHRASES:
+            self.brain.reset_conversation()
+            self.peripherals.speak("Conversation cleared. What shall we work on?")
+            return None
+
+        if normalized in CONFIG["WAKE_WORDS"]:
+            self.peripherals.speak("Yes, how can I help you?")
+            return None
+
+        response = self.brain.generate_response(normalized)
+        executed_actions = self.officer.parse_and_execute(response)
+
+        self.peripherals.speak(response)
+
+        if executed_actions:
+            self.peripherals.speak(" | ".join(executed_actions))
+            self.peripherals.show_dashboard(self.officer.get_summary())
+
+        return None
+
+
 def main() -> None:
     args = parse_args()
     setup_logging()
+    validate_config()
     boot_sequence()
 
     try:
@@ -64,51 +133,16 @@ def main() -> None:
         console.print("Add your key to the .env file as GEMINI_API_KEY=... and try again.")
         sys.exit(1)
 
-    officer = ExecutiveOfficer()
+    officer = ExecutiveOfficer(load_state=not args.fresh)
     peripherals = PeripheralController()
 
-    peripherals.speak(
-        f"Good day, {CONFIG['USER_NAME']}. I am KEERTHI. "
-        f"How can I facilitate your productivity today?"
+    session = ConversationSession(
+        brain=brain,
+        officer=officer,
+        peripherals=peripherals,
+        use_microphone=not args.text,
     )
-
-    while True:
-        # 1. Listen for input
-        user_input = peripherals.listen(use_microphone=not args.text)
-
-        if user_input.lower().strip() in EXIT_PHRASES:
-            peripherals.speak(
-                f"Understood. Powering down Keerthi. Have a pleasant day, {CONFIG['USER_NAME']}."
-            )
-            break
-
-        if not user_input.strip():
-            continue
-
-        # 2. Reset conversation
-        if user_input.lower().strip() in RESET_PHRASES:
-            brain.reset_conversation()
-            peripherals.speak("Conversation cleared. What shall we work on?")
-            continue
-
-        # 3. Wake word acknowledgment
-        if user_input.lower().strip() in CONFIG["WAKE_WORDS"]:
-            peripherals.speak("Yes, how can I help you?")
-            continue
-
-        # 4. Process with AI
-        response = brain.generate_response(user_input.strip())
-
-        # 5. Handle Actions
-        executed_actions = officer.parse_and_execute(response)
-
-        # 6. Speak response
-        peripherals.speak(response)
-
-        # 7. Confirm executed actions and show internal status
-        if executed_actions:
-            peripherals.speak(" | ".join(executed_actions))
-            peripherals.show_dashboard(officer.get_summary())
+    session.run()
 
 
 if __name__ == "__main__":

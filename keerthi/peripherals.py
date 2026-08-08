@@ -65,6 +65,7 @@ class PeripheralController:
             import speech_recognition as sr
             with sr.Microphone() as source:
                 console.print("[bold blue]Listening...[/bold blue]")
+                self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
                 audio = self.recognizer.listen(source, timeout=10, phrase_time_limit=10)
             text = self.recognizer.recognize_google(audio, language=CONFIG["STT_LANGUAGE"])
             console.print(f"[bold blue]You:[/bold blue] {text}")
@@ -83,13 +84,23 @@ class PeripheralController:
         except EOFError:
             return "exit"
 
+    def close(self) -> None:
+        """Releases TTS and speech resources."""
+        if self.engine is not None:
+            try:
+                self.engine.stop()
+            except Exception:
+                pass
+
     def show_dashboard(self, state: dict) -> None:
         table = Table(title="System Status", box=box.ROUNDED)
         table.add_column("Category", style="cyan")
         table.add_column("Details", style="white")
 
         # Devices
-        dev_str = ", ".join([f"{k}: {v['status']}" for k, v in state["devices"].items()])
+        dev_str = ", ".join(
+            [f"{k}: {v.get('status', 'unknown')}" for k, v in state["devices"].items()]
+        )
         table.add_row("Smart Home", dev_str)
 
         # Tasks
