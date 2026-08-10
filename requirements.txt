@@ -4,3 +4,4 @@ rich
 pyttsx3
 SpeechRecognition
 pyaudio
+requests

@@ -61,6 +61,26 @@ class TestConversationSession(unittest.TestCase):
         self.peripherals.close.assert_called_once()
         self.assertEqual(self.peripherals.listen.call_count, 2)
 
+    def test_confirm_action_accepts_yes(self):
+        self.peripherals.listen.return_value = "yes"
+        self.assertTrue(self.session._confirm_action("UNLOCK_DOOR"))
+
+    def test_confirm_action_accepts_yeah(self):
+        self.peripherals.listen.return_value = "yeah"
+        self.assertTrue(self.session._confirm_action("UNLOCK_DOOR"))
+
+    def test_confirm_action_rejects_no(self):
+        self.peripherals.listen.return_value = "no"
+        self.assertFalse(self.session._confirm_action("UNLOCK_DOOR"))
+
+    def test_handle_input_passes_confirm_callback(self):
+        self.brain.generate_response.return_value = "Unlocking. [ACTION:UNLOCK_DOOR]"
+        self.officer.parse_and_execute.return_value = []
+        self.session.handle_input("unlock the door")
+        self.officer.parse_and_execute.assert_called_once()
+        call_kwargs = self.officer.parse_and_execute.call_args.kwargs
+        self.assertIn("confirm", call_kwargs)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -26,13 +26,31 @@ class TestNlpManifest(unittest.TestCase):
                 "FAN_ON",
                 "FAN_OFF",
                 "FAN_SPEED",
+                "TV_ON",
+                "TV_OFF",
+                "CURTAIN_OPEN",
+                "CURTAIN_CLOSE",
+                "HEATER_ON",
+                "HEATER_OFF",
+                "HEATER_TEMP",
+                "RESET_STATE",
+                "SET_TIMER",
+                "CANCEL_TIMER",
+                "CHECK_TIMERS",
                 "LOCK_DOOR",
                 "UNLOCK_DOOR",
                 "ADD_TASK",
                 "REMOVE_TASK",
                 "STATUS_REPORT",
+                "WEATHER_REPORT",
             },
         )
+
+    def test_manifest_marks_safety_intents(self):
+        manifest = get_nlp_manifest()
+        self.assertIn("[ACTION:UNLOCK_DOOR] [SAFETY]", manifest)
+        self.assertIn("[ACTION:REMOVE_TASK] [SAFETY]", manifest)
+        self.assertIn("confirm", manifest)
 
 
 if __name__ == "__main__":

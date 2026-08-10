@@ -7,3 +7,16 @@ coverage/
 .env*
 !.env.example
 keerthi_state.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+
+# Lint / type-check caches
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/

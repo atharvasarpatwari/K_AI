@@ -3,13 +3,13 @@ import logging
 import os
 import sys
 import time
-from typing import Optional
+from contextlib import suppress
 
 # Ensure the current directory is in the Python Path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from keerthi.config import CONFIG, validate_config
 from keerthi.brain import KeerthiBrain
+from keerthi.config import CONFIG, validate_config
 from keerthi.executive import ExecutiveOfficer
 from keerthi.peripherals import PeripheralController, console
 
@@ -25,6 +25,13 @@ def setup_logging() -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+
+
+def _enable_unicode_console() -> None:
+    """Switch the Windows console to UTF-8 so unicode renders correctly."""
+    if os.name == "nt":
+        with suppress(Exception):
+            os.system("chcp 65001 > nul")
 
 
 def boot_sequence() -> None:
@@ -84,9 +91,10 @@ class ConversationSession:
                 if self.handle_input(user_input) == "exit":
                     break
         finally:
+            self.officer.stop()
             self.peripherals.close()
 
-    def handle_input(self, user_input: str) -> Optional[str]:
+    def handle_input(self, user_input: str) -> str | None:
         """Process one utterance. Returns 'exit' when the session should end."""
         normalized = user_input.lower().strip()
 
@@ -109,7 +117,9 @@ class ConversationSession:
             return None
 
         response = self.brain.generate_response(normalized)
-        executed_actions = self.officer.parse_and_execute(response)
+        executed_actions = self.officer.parse_and_execute(
+            response, confirm=self._confirm_action
+        )
 
         self.peripherals.speak(response)
 
@@ -119,11 +129,21 @@ class ConversationSession:
 
         return None
 
+    def _confirm_action(self, intent: str) -> bool:
+        """Asks the user to confirm a safety-critical action before it runs."""
+        self.peripherals.speak(
+            f"Hold on — {intent} is a safety-sensitive action. Shall I proceed?"
+        )
+        reply = self.peripherals.listen(use_microphone=self.use_microphone)
+        approvals = ("yes", "y", "yeah", "yep", "confirm", "proceed", "go ahead")
+        return reply.strip().lower() in approvals
+
 
 def main() -> None:
     args = parse_args()
     setup_logging()
     validate_config()
+    _enable_unicode_console()
     boot_sequence()
 
     try:
@@ -135,6 +155,7 @@ def main() -> None:
 
     officer = ExecutiveOfficer(load_state=not args.fresh)
     peripherals = PeripheralController()
+    officer.set_notifier(peripherals.speak)
 
     session = ConversationSession(
         brain=brain,

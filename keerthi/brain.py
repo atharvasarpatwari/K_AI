@@ -1,5 +1,9 @@
 import logging
+from typing import Any, cast
+
 from google import genai
+from google.genai import types
+
 from keerthi.config import CONFIG
 from keerthi.nlp import get_nlp_manifest
 
@@ -9,19 +13,20 @@ class KeerthiBrain:
     def __init__(self) -> None:
         if not CONFIG["GEMINI_API_KEY"]:
             raise ValueError("GEMINI_API_KEY not found in environment.")
-        
+
         self.client = genai.Client(api_key=CONFIG["GEMINI_API_KEY"])
-        self.config = {
+        self.config: types.GenerateContentConfigDict = {
             "system_instruction": self._get_system_prompt(),
             "temperature": CONFIG["TEMPERATURE"],
             "max_output_tokens": CONFIG["MAX_OUTPUT_TOKENS"],
             "top_p": CONFIG["TOP_P"],
         }
-        self.history = []
+        self.history: list[types.ContentDict] = []
 
     def _get_system_prompt(self) -> str:
-        return f"""You are KEERTHI, a highly advanced, conversational voice assistant. 
-Your goal is to provide seamless, proactive, and intelligent assistance across daily life, work, and smart home management.
+        return f"""You are KEERTHI, a highly advanced, conversational voice assistant.
+Your goal is to provide seamless, proactive, and intelligent assistance across daily
+life, work, and smart home management.
 
 Persona:
 - Calm, confident, and slightly witty.
@@ -46,17 +51,18 @@ Location: {CONFIG['LOCATION']}
     def generate_response(self, user_input: str) -> str:
         try:
             self.history.append({"role": "user", "parts": [{"text": user_input}]})
-            
+
             response = self.client.models.generate_content(
                 model=CONFIG["MODEL_NAME"],
-                contents=self.history,
+                contents=cast(Any, self.history),
                 config=self.config
             )
-            
-            self.history.append({"role": "model", "parts": [{"text": response.text}]})
+
+            reply = response.text or ""
+            self.history.append({"role": "model", "parts": [{"text": reply}]})
             self._trim_history()
-            return response.text
-        except Exception as e:
+            return reply
+        except Exception:
             logger.exception("Gemini call failed")
             return "I hit a technical snag. Please try that again."
 

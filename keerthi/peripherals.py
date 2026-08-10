@@ -1,5 +1,6 @@
 import re
-from typing import Optional
+from contextlib import suppress
+from typing import Any
 
 from rich import box
 from rich.console import Console
@@ -15,15 +16,16 @@ class PeripheralController:
     def __init__(self) -> None:
         self.tts_available = False
         self.stt_available = False
-        self.engine = None
-        self.recognizer = None
+        self.engine: Any = None
+        self.recognizer: Any = None
+        self._vosk_model: Any = None
 
         self._init_tts()
         self._init_stt()
 
     def _init_tts(self) -> None:
         try:
-            import pyttsx3
+            import pyttsx3  # type: ignore[import-untyped]
             self.engine = pyttsx3.init()
             self.engine.setProperty("rate", CONFIG["TTS_RATE"])
             self.tts_available = True
@@ -32,7 +34,7 @@ class PeripheralController:
 
     def _init_stt(self) -> None:
         try:
-            import speech_recognition as sr
+            import speech_recognition as sr  # type: ignore[import-untyped]
             self.recognizer = sr.Recognizer()
             self.recognizer.energy_threshold = 300
             self.recognizer.dynamic_energy_threshold = True
@@ -45,38 +47,80 @@ class PeripheralController:
         clean_text = re.sub(r"\[ACTION:.*?\]", "", text).strip()
 
         # Display in console with flair
-        console.print(Panel(clean_text, title="[bold cyan]KEERTHI[/bold cyan]", border_style="cyan"))
+        console.print(
+            Panel(clean_text, title="[bold cyan]KEERTHI[/bold cyan]", border_style="cyan")
+        )
 
         if self.tts_available and self.engine is not None:
             self.engine.say(clean_text)
             self.engine.runAndWait()
 
-    def listen(self, use_microphone: Optional[bool] = None) -> str:
+    def listen(self, use_microphone: bool | None = None) -> str:
         """Capture a voice command via microphone, falling back to text input."""
-        if self.stt_available and (CONFIG["USE_MICROPHONE"] if use_microphone is None else use_microphone):
+        mic_enabled = (
+            CONFIG["USE_MICROPHONE"] if use_microphone is None else use_microphone
+        )
+        if self.stt_available and mic_enabled:
             utterance = self._listen_microphone()
             if utterance is not None:
                 return utterance
             console.print("[dim]Microphone unavailable — falling back to text input.[/dim]")
         return self._listen_text()
 
-    def _listen_microphone(self) -> Optional[str]:
+    def _listen_microphone(self) -> str | None:
         try:
             import speech_recognition as sr
             with sr.Microphone() as source:
                 console.print("[bold blue]Listening...[/bold blue]")
                 self.recognizer.adjust_for_ambient_noise(source, duration=0.5)
                 audio = self.recognizer.listen(source, timeout=10, phrase_time_limit=10)
-            text = self.recognizer.recognize_google(audio, language=CONFIG["STT_LANGUAGE"])
-            console.print(f"[bold blue]You:[/bold blue] {text}")
-            return text
         except sr.UnknownValueError:
             console.print("[dim]Couldn't make that out — try again or type it.[/dim]")
+            return None
         except sr.RequestError:
             console.print("[dim]Speech service unreachable — using text input.[/dim]")
+            return None
         except Exception:
             console.print("[dim]Microphone error — using text input.[/dim]")
+            return None
+
+        text = self._transcribe(audio)
+        if text:
+            console.print(f"[bold blue]You:[/bold blue] {text}")
+            return text
+        console.print("[dim]Couldn't make that out — try again or type it.[/dim]")
         return None
+
+    def _transcribe(self, audio: Any) -> str:
+        """Transcribes audio with the configured engine, falling back to Google."""
+        if CONFIG["STT_ENGINE"] == "vosk":
+            text = self._transcribe_vosk(audio)
+            if text:
+                return text
+        return self._transcribe_google(audio)
+
+    def _transcribe_google(self, audio: Any) -> str:
+        try:
+            return str(self.recognizer.recognize_google(audio, language=CONFIG["STT_LANGUAGE"]))
+        except Exception:
+            return ""
+
+    def _transcribe_vosk(self, audio: Any) -> str:
+        try:
+            import json
+
+            import vosk  # type: ignore
+
+            if self._vosk_model is None:
+                self._vosk_model = vosk.Model(CONFIG["VOSK_MODEL_PATH"])
+            recognizer = vosk.KaldiRecognizer(self._vosk_model, 16000)
+            data = audio.get_raw_data(convert_rate=16000, convert_width=2)
+            if not recognizer.AcceptWaveform(data):
+                return ""
+            result = json.loads(recognizer.Result())
+            return str(result.get("text", "").strip())
+        except Exception:
+            return ""
 
     def _listen_text(self) -> str:
         try:
@@ -87,12 +131,10 @@ class PeripheralController:
     def close(self) -> None:
         """Releases TTS and speech resources."""
         if self.engine is not None:
-            try:
+            with suppress(Exception):
                 self.engine.stop()
-            except Exception:
-                pass
 
-    def show_dashboard(self, state: dict) -> None:
+    def show_dashboard(self, state: dict[str, Any]) -> None:
         table = Table(title="System Status", box=box.ROUNDED)
         table.add_column("Category", style="cyan")
         table.add_column("Details", style="white")

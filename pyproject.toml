@@ -1,0 +1,22 @@
+[project]
+name = "keerthi-ai"
+version = "2.1.0"
+description = "KEERTHI AI — conversational voice assistant for Windows with a simulated smart home."
+requires-python = ">=3.11"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["."]
+exclude = ["node_modules", "dist", "build"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B", "SIM"]
+ignore = []
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["keerthi", "main.py"]
+exclude = ["node_modules"]
+mypy_path = ["."]
