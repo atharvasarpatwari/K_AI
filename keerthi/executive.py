@@ -41,6 +41,7 @@ class ExecutiveOfficer:
         self._running = False
         self._thread: threading.Thread | None = None
         self._weather_provider: Callable[[str], str] | None = None
+        self._vision_provider: Callable[[str], str] | None = None
         self._handlers: dict[str, Callable[[list[str]], str | None]] = {
             "SYSTEM_STATUS": self._system_status,
             "CPU_USAGE": self._cpu_usage,
@@ -61,6 +62,27 @@ class ExecutiveOfficer:
             "ADD_TASK": self._add_task,
             "REMOVE_TASK": self._remove_task,
             "STATUS_REPORT": self._status_report,
+            "TYPE_TEXT": self._type_text,
+            "PRESS_KEYS": self._press_keys,
+            "MOVE_MOUSE": self._move_mouse,
+            "CLICK_MOUSE": self._click_mouse,
+            "SCROLL_MOUSE": self._scroll_mouse,
+            "TAKE_SCREENSHOT": self._take_screenshot,
+            "READ_SCREEN": self._read_screen,
+            "SHUTDOWN": self._shutdown,
+            "RESTART": self._restart,
+            "SLEEP": self._sleep,
+            "LOCK_SCREEN": self._lock_screen,
+            "SET_VOLUME": self._set_volume,
+            "MUTE": self._mute,
+            "SET_BRIGHTNESS": self._set_brightness,
+            "LIST_WINDOWS": self._list_windows,
+            "FOCUS_WINDOW": self._focus_window,
+            "MINIMIZE_WINDOW": self._minimize_window,
+            "MAXIMIZE_WINDOW": self._maximize_window,
+            "CLOSE_WINDOW": self._close_window,
+            "OPEN_URL": self._open_url,
+            "WEB_SEARCH": self._web_search,
         }
 
     def parse_and_execute(
@@ -163,6 +185,162 @@ class ExecutiveOfficer:
 
     def _open_file(self, args: list[str]) -> str:
         return system.open_file(_join_args(args))
+
+    # ---- Input automation ----
+
+    def _type_text(self, args: list[str]) -> str:
+        text = _join_args(args)
+        if not text:
+            return "No text given to type."
+        result = system.type_text(text)
+        return f"Typed: {result}" if result else "Could not type that text."
+
+    def _press_keys(self, args: list[str]) -> str:
+        combo = _join_args(args)
+        if not combo:
+            return "No key combination given."
+        result = system.press_keys(combo)
+        return f"Pressed {result}." if result else f"Could not press '{combo}'."
+
+    def _move_mouse(self, args: list[str]) -> str:
+        parsed = _first_two_ints(args)
+        if parsed is None:
+            return "Please provide screen coordinates (e.g. MOVE_MOUSE:500:400)."
+        x, y = parsed
+        result = system.move_mouse(x, y)
+        return f"Moved cursor to {result}." if result else "Could not move the cursor."
+
+    def _click_mouse(self, args: list[str]) -> str:
+        button = "left"
+        x: int | None = None
+        y: int | None = None
+        parts = args[:3]
+        if parts and parts[0].lower() in ("left", "right", "middle"):
+            button = parts[0].lower()
+            parts = parts[1:]
+        parsed = _first_two_ints(parts)
+        if parsed is not None:
+            x, y = parsed
+        result = system.click_mouse(x, y, button=button)
+        return f"Performed {result}." if result else "Could not click the mouse."
+
+    def _scroll_mouse(self, args: list[str]) -> str:
+        raw = _join_args(args)
+        direction = "down"
+        if raw.lower() in ("up", "down"):
+            direction = raw.lower()
+            clicks = 1
+        else:
+            match = _first_int(args)
+            if match is None:
+                return "Please specify a scroll direction (up/down)."
+            clicks = max(1, min(match, 100))
+        result = system.scroll_mouse(direction, clicks)
+        return f"Scrolled {result}." if result else "Could not scroll."
+
+    # ---- Screenshots & screen analysis ----
+
+    def _take_screenshot(self, args: list[str]) -> str:
+        path = system.take_screenshot()
+        return f"Screenshot saved to {path}." if path else "Could not take a screenshot."
+
+    def _read_screen(self, args: list[str]) -> str:
+        path = system.take_screenshot()
+        if not path:
+            return "Could not take a screenshot."
+        provider = self._resolve_vision_provider()
+        if provider is None:
+            return f"Screenshot saved to {path}."
+        description = provider(path)
+        return description or f"Screenshot saved to {path}."
+
+    def set_vision_provider(self, provider: Callable[[str], str]) -> None:
+        """Overrides the screen-analysis source (used by tests and the web server)."""
+        self._vision_provider = provider
+
+    def _resolve_vision_provider(self) -> Callable[[str], str] | None:
+        return self._vision_provider
+
+    # ---- Power & display ----
+
+    def _shutdown(self, args: list[str]) -> str:
+        return system.shutdown_system()
+
+    def _restart(self, args: list[str]) -> str:
+        return system.restart_system()
+
+    def _sleep(self, args: list[str]) -> str:
+        return system.sleep_system()
+
+    def _lock_screen(self, args: list[str]) -> str:
+        return system.lock_screen()
+
+    def _set_volume(self, args: list[str]) -> str:
+        level = _first_int(args)
+        if level is None:
+            return "Please provide a volume percentage (e.g. SET_VOLUME:50)."
+        result = system.set_volume(max(0, min(100, level)))
+        return f"Volume set to {result}." if result else "Could not set the volume."
+
+    def _mute(self, args: list[str]) -> str:
+        raw = _join_args(args).strip().lower()
+        on = raw not in ("off", "unmute", "false", "0", "no")
+        result = system.set_mute(on)
+        return f"Volume {result}." if result else "Could not change mute state."
+
+    def _set_brightness(self, args: list[str]) -> str:
+        level = _first_int(args)
+        if level is None:
+            return "Please provide a brightness percentage (e.g. SET_BRIGHTNESS:70)."
+        result = system.set_brightness(level)
+        return f"Brightness set to {result}." if result else "Could not set the brightness."
+
+    # ---- Window management ----
+
+    def _list_windows(self, args: list[str]) -> str:
+        rows = system.list_windows()
+        if not rows:
+            return "No open windows found (or window management is unavailable)."
+        titles = ", ".join(row["title"] for row in rows[:15])
+        return f"Open windows: {titles}."
+
+    def _focus_window(self, args: list[str]) -> str:
+        title = _join_args(args)
+        if not title:
+            return "Please name the window to focus."
+        return system.focus_window(title)
+
+    def _minimize_window(self, args: list[str]) -> str:
+        title = _join_args(args)
+        if not title:
+            return "Please name the window to minimize."
+        return system.minimize_window(title)
+
+    def _maximize_window(self, args: list[str]) -> str:
+        title = _join_args(args)
+        if not title:
+            return "Please name the window to maximize."
+        return system.maximize_window(title)
+
+    def _close_window(self, args: list[str]) -> str:
+        title = _join_args(args)
+        if not title:
+            return "Please name the window to close."
+        return system.close_window(title)
+
+    # ---- Browser ----
+
+    def _open_url(self, args: list[str]) -> str:
+        url = _join_args(args)
+        if not url:
+            return "Please provide a URL to open."
+        return system.open_url(url)
+
+    def _web_search(self, args: list[str]) -> str:
+        query = _join_args(args)
+        if not query:
+            return "Please provide a search query."
+        return system.web_search(query)
 
     # ---- Tasks ----
 
@@ -343,6 +521,12 @@ def _first_int(args: list[str], default: int | None = None) -> int | None:
         return default
     match = re.search(r"-?\d+", args[0])
     return int(match.group()) if match is not None else None
+
+
+def _first_two_ints(args: list[str]) -> tuple[int, int] | None:
+    """Extracts the first two integers (e.g. screen coordinates) from the args."""
+    nums = [int(m.group()) for a in args for m in [re.search(r"-?\d+", a)] if m]
+    return (nums[0], nums[1]) if len(nums) >= 2 else None
 
 
 def _join_args(args: list[str]) -> str:

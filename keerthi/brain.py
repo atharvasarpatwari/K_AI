@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 from typing import Any, cast
 
 from google import genai
@@ -48,6 +49,11 @@ Operational Rules:
 - ALWAYS use the [ACTION:XXX] tags from the Command Library above when performing an action.
 - When a tag needs an argument that contains a colon (like a file path), keep the
   colon inside the argument, e.g. [ACTION:FILE_LIST:C:\\Users].
+- For multi-step tasks, chain multiple tags in one reply, e.g. opening a browser
+  and searching: [ACTION:OPEN_APP:chrome][ACTION:WEB_SEARCH:best AI models].
+- When the user asks what is on the screen, use [ACTION:READ_SCREEN].
+- Before moving the mouse, clicking, typing, or pressing hotkeys, state what you
+  are about to do and wait for confirmation (these are [SAFETY] actions).
 
 Context:
 User: {CONFIG['USER_NAME']}
@@ -80,3 +86,35 @@ Host: (injected live via state)
 
     def reset_conversation(self) -> None:
         self.history = []
+
+    def describe_image(self, image_path: str) -> str:
+        """Describes an image file (e.g. a screenshot) using the vision model."""
+        try:
+            image_bytes = Path(image_path).read_bytes()
+            response = self.client.models.generate_content(
+                model=CONFIG["MODEL_NAME"],
+                contents=cast(
+                    Any,
+                    [
+                        types.Content(
+                            role="user",
+                            parts=[
+                                types.Part(
+                                    text="Describe what is on this computer screen in "
+                                    "2-3 concise sentences: visible windows, text, buttons "
+                                    "and anything notable. Be specific enough that the user "
+                                    "can act on it."
+                                ),
+                                types.Part.from_bytes(
+                                    data=image_bytes, mime_type="image/png"
+                                ),
+                            ],
+                        )
+                    ],
+                ),
+                config=self.config,
+            )
+            return response.text or ""
+        except Exception:
+            logger.exception("Gemini vision call failed")
+            return ""

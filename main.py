@@ -156,6 +156,7 @@ def main() -> None:
     officer = ExecutiveOfficer(load_state=not args.fresh)
     peripherals = PeripheralController()
     officer.set_notifier(peripherals.speak)
+    officer.set_vision_provider(brain.describe_image)
 
     session = ConversationSession(
         brain=brain,

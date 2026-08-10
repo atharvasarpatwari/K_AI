@@ -1,6 +1,6 @@
 # KEERTHI AI — Project Documentation (for review)
 
-**Document date:** 2026-08-10 · **Version:** 2.3.0 · **Language:** Python 3.13
+**Document date:** 2026-08-10 · **Version:** 2.4.0 · **Language:** Python 3.13
 
 ---
 
@@ -17,7 +17,9 @@ It combines:
 
 The assistant has full access to the machine it runs on: it can report live
 CPU/memory/disk/battery metrics, list and terminate processes, launch apps, run
-commands, and browse/open files — with explicit user confirmation for destructive
+commands, browse/open files, automate the keyboard and mouse, capture and analyse
+screenshots, control power/volume/brightness, manage open windows, and drive the
+browser — with explicit user confirmation for destructive or input-injecting
 operations. Task/timer state is persisted to a JSON file so it survives restarts.
 
 ---
@@ -52,18 +54,18 @@ E:\KeerthiAI\
 └── keerthi/
     ├── __init__.py               Empty package marker
     ├── config.py                 CONFIG TypedDict, env helpers, validate_config()
-    ├── brain.py                  KeerthiBrain (Gemini client + history)
+    ├── brain.py                  KeerthiBrain (Gemini client + history + vision)
     ├── executive.py              ExecutiveOfficer (action dispatch + timers + persistence)
     ├── peripherals.py            PeripheralController (TTS/STT/console)
     ├── nlp.py                    COMMAND_INTENTS, SAFETY_INTENTS, get_nlp_manifest()
-    ├── system.py                 Real system control (psutil metrics, processes, apps, commands, files)
+    ├── system.py                 Real system control (psutil + pyautogui + win32)
     ├── server.py                 FastAPI web backend (/api/chat, /api/action, /api/state, ...)
     └── services/
         ├── __init__.py
         └── weather.py            Open-Meteo weather lookup (geocode + current conditions)
 ```
 
-`tests/` contains 11 test modules (131 tests, stdlib `unittest`).
+`tests/` contains 13 test modules (208 tests, stdlib `unittest`).
 
 ---
 
@@ -124,11 +126,15 @@ Clean separation of concerns:
   Gemini client and a generation `config` (system prompt, `temperature`,
   `max_output_tokens`, `top_p`).
 - **`_get_system_prompt()`**: persona + operational rules + the command manifest
-  from `nlp.get_nlp_manifest()` + user/location context.
+  from `nlp.get_nlp_manifest()` + user/location context (includes multi-tag
+  chaining and screen-analysis rules).
 - **`generate_response(user_input)`**: appends to history, calls
   `client.models.generate_content`, appends the reply, trims history.
   On any exception it logs (`logger.exception`) and returns a generic message —
   raw errors are **not** leaked to the user.
+- **`describe_image(image_path)`**: sends a screenshot PNG to the vision model
+  (`types.Part.from_bytes`, mime `image/png`) and returns a concise description;
+  used as the `READ_SCREEN` provider. Returns `""` on any failure.
 - **`_trim_history()`**: caps history at `MAX_HISTORY_TURNS * 2` messages (newest kept).
 - **`reset_conversation()`**: clears history (used by `/reset`).
 
@@ -150,6 +156,17 @@ Clean separation of concerns:
     (reports if not found) *(SAFETY — needs confirmation)*.
   - Reporting: `STATUS_REPORT` (combined system + task summary),
     `WEATHER_REPORT`, `RESET_STATE`, timer intents.
+  - Input automation: `TYPE_TEXT`, `PRESS_KEYS`, `MOVE_MOUSE`, `CLICK_MOUSE`,
+    `SCROLL_MOUSE` — delegate to `system.type_text`/`press_keys`/`move_mouse`/
+    `click_mouse`/`scroll_mouse` *(SAFETY — needs confirmation)*.
+  - Screenshots: `TAKE_SCREENSHOT` (saves a PNG, reports the path) and
+    `READ_SCREEN` (captures, then asks a vision provider via
+    `set_vision_provider` to describe the screen; falls back to the saved path).
+  - Power & display: `SHUTDOWN`, `RESTART`, `SLEEP`, `LOCK_SCREEN`
+    *(SAFETY — needs confirmation)*, `SET_VOLUME`, `MUTE`, `SET_BRIGHTNESS`.
+  - Windows: `LIST_WINDOWS`, `FOCUS_WINDOW`, `MINIMIZE_WINDOW`,
+    `MAXIMIZE_WINDOW`, `CLOSE_WINDOW` *(close is SAFETY — needs confirmation)*.
+  - Browser: `OPEN_URL`, `WEB_SEARCH`.
 - Helpers: `_join_args(args)` rejoins colon-split arguments so Windows paths like
   `C:\Users\me` survive the `[ACTION:...]` tag parser intact.
 - `get_summary()` — returns `{system, processes, tasks, timers}` for the web UI.
@@ -186,8 +203,10 @@ Clean separation of concerns:
 ### 4.5 `keerthi/nlp.py`
 - `COMMAND_INTENTS`: system intents with descriptions (single source of truth for the
   command library).
-- `SAFETY_INTENTS` — `{KILL_PROCESS, RUN_COMMAND, REMOVE_TASK}`: destructive
-  operations that require explicit user confirmation (CLI prompt / web confirm).
+- `SAFETY_INTENTS` — `{KILL_PROCESS, RUN_COMMAND, REMOVE_TASK, TYPE_TEXT,
+  PRESS_KEYS, MOVE_MOUSE, CLICK_MOUSE, SCROLL_MOUSE, SHUTDOWN, RESTART, SLEEP,
+  LOCK_SCREEN, CLOSE_WINDOW}`: destructive or input-injecting operations that
+  require explicit user confirmation (CLI prompt / web confirm).
 - `get_nlp_manifest() -> str`: renders the intents as the `[ACTION]` block injected
   into the system prompt.
 
@@ -213,6 +232,10 @@ Clean separation of concerns:
   - `GET /api/health` — readiness probe (`status`, `version`, `apiKeyPresent`).
   - `GET /api/state` — current system state: live metrics, top processes, tasks, timers.
   - `GET /api/files?path=` — directory listing via `system.list_directory`.
+  - `GET /api/screenshot` — returns the most recent screenshot as a PNG
+    (`system.latest_screenshot`); 404 when none exists yet.
+  - `GET /api/windows` — returns the open top-level windows
+    (`system.list_windows`) for the dashboard.
   - `POST /api/action` — executes a single `[ACTION:...]` (e.g. app launcher,
     command runner, file open, timer set) and returns confirmations + fresh state.
   - `POST /api/transcribe` — accepts raw 16 kHz mono int16 PCM audio and returns
@@ -246,6 +269,31 @@ Clean separation of concerns:
 - `list_directory(path)`: sorted `{name, isDir, size}` entries for the web file browser.
 - `open_file(path)`: opens via `os.startfile`.
 
+**Input automation** (pyautogui, lazy-loaded): `type_text` (with a clipboard-paste
+fallback for untypable characters), `press_keys` (splits `ctrl+c` on `+` →
+`hotkey`), `move_mouse`, `click_mouse` (coords or current position, any button),
+`scroll_mouse` (up/down by clicks). All return `""` on failure or when the
+package is unavailable.
+
+**Screenshots** (pyautogui + `SCREENSHOT_DIR`): `take_screenshot()` saves a
+timestamped PNG and returns its path; `latest_screenshot()` returns the newest
+one (used by the web dashboard).
+
+**Power & display**: `shutdown_system`/`restart_system` (`shutdown /s|/r /t 5`),
+`sleep_system`/`lock_screen` (`rundll32`), all via a shared `_run_power_command`.
+Volume/mute via `pycaw` (`devices.EndpointVolume`, with a fallback to the older
+`Activate` + `QueryInterface` API); `get_volume_state()` feeds the dashboard.
+Brightness via PowerShell `WmiMonitorBrightnessMethods.WmiSetBrightness` — may
+require admin on some machines and degrades gracefully.
+
+**Window management** (win32gui, lazy-loaded, Windows-only): `list_windows`
+(visible top-level windows), `_find_window` (case-insensitive title match),
+`focus_window` (restore-if-iconic + `SetForegroundWindow`), `minimize_window` /
+`maximize_window` (`ShowWindow`), `close_window` (`PostMessage WM_CLOSE`).
+
+**Browser**: `open_url` (prepends `https://` when no scheme; `webbrowser.open`)
+and `web_search` (Google search URL, `urllib.parse.quote`).
+
 ---
 
 ## 5. Configuration
@@ -269,6 +317,7 @@ All optional — read from `.env` (see `.env.example`), with defaults shown:
 | `TOP_P`            | `0.95`            | Nucleus sampling (validated 0.0–1.0)     |
 | `LOG_LEVEL`        | `INFO`            | Python logging level                     |
 | `STATE_FILE`       | `keerthi_state.json` | Persistence file path                 |
+| `SCREENSHOT_DIR`   | `screenshots`     | Folder where `TAKE_SCREENSHOT` saves PNGs |
 
 ---
 
@@ -278,7 +327,7 @@ All optional — read from `.env` (see `.env.example`), with defaults shown:
 python main.py                # run (mic → text fallback)
 python main.py --text         # force text input
 python main.py --fresh        # start with default state (ignore saved)
-python main.py --version      # print "KEERTHI v2.3.0" and exit
+python main.py --version      # print "KEERTHI v2.4.0" and exit
 ```
 
 In-session commands: `exit` / `quit` / `shutdown` (power down), `/reset`
@@ -309,6 +358,27 @@ In-session commands: `exit` / `quit` / `shutdown` (power down), `/reset`
 | `SET_TIMER`      | `seconds`      | schedule a timer (e.g. `SET_TIMER:90`)      |
 | `CANCEL_TIMER`   | `index`/`label`| cancel a pending timer                       |
 | `CHECK_TIMERS`   | –              | report pending timers with time remaining    |
+| `TYPE_TEXT`      | `text`         | type text as if on the keyboard *(SAFETY)*   |
+| `PRESS_KEYS`     | `combo`        | press a shortcut like `ctrl+c` *(SAFETY)*    |
+| `MOVE_MOUSE`     | `x:y`          | move cursor to screen coordinates *(SAFETY)* |
+| `CLICK_MOUSE`    | `x:y`/`button` | click at coords or current position *(SAFETY)* |
+| `SCROLL_MOUSE`   | `up`/`down`    | scroll the wheel (e.g. `down:5`) *(SAFETY)*  |
+| `TAKE_SCREENSHOT`| –              | save a PNG, report the path                  |
+| `READ_SCREEN`    | –              | screenshot + Gemini vision description       |
+| `SHUTDOWN`       | –              | shut down the computer *(SAFETY)*            |
+| `RESTART`        | –              | restart the computer *(SAFETY)*              |
+| `SLEEP`          | –              | put the computer to sleep *(SAFETY)*         |
+| `LOCK_SCREEN`    | –              | lock the screen *(SAFETY)*                   |
+| `SET_VOLUME`     | `0-100`        | set system volume percentage                 |
+| `MUTE`           | `on`/`off`     | mute or unmute the system volume             |
+| `SET_BRIGHTNESS` | `0-100`        | set screen brightness (WMI)                  |
+| `LIST_WINDOWS`   | –              | list open top-level windows                  |
+| `FOCUS_WINDOW`   | `title`        | bring a window to the front                  |
+| `MINIMIZE_WINDOW`| `title`        | minimize a window                            |
+| `MAXIMIZE_WINDOW`| `title`        | maximize a window                            |
+| `CLOSE_WINDOW`   | `title`        | close a window *(SAFETY)*                    |
+| `OPEN_URL`       | `url`          | open a URL in the default browser            |
+| `WEB_SEARCH`     | `query`        | search Google in the default browser         |
 
 Example model output: `"Your CPU is at 42%. [ACTION:CPU_USAGE]"`
 
@@ -327,21 +397,23 @@ Example model output: `"Your CPU is at 42%. [ACTION:CPU_USAGE]"`
 
 ## 9. Testing
 
-Run: `python -m unittest discover -s tests -v` (stdlib, no extra deps). **131 tests, all passing.**
+Run: `python -m unittest discover -s tests -v` (stdlib, no extra deps). **208 tests, all passing.**
 Frontend: `npm test` (vitest + Testing Library, 7 tests), `npm run lint` (tsc), `npm run build`.
 
 | File                  | # Tests | Covers                                                         |
 | --------------------- | ------- | -------------------------------------------------------------- |
 | `test_executive.py`   | ~40     | every system intent, safety confirmation gate, timers + stale-fire pruning, weather provider, reset |
+| `test_executive_control.py` | ~35 | new control handlers: input automation, screenshots/vision, power/display, windows, browser, safety gates |
 | `test_system.py`      | ~10     | psutil metrics (incl. no-battery), process list/kill, app launch, command run, file browse/open |
+| `test_system_control.py` | 39   | pyautogui/win32/pycaw/subprocess helpers incl. error + fallback paths |
 | `test_persistence.py` | 4       | save/reload, `--fresh`, missing file, corrupt file             |
 | `test_config.py`      | 11      | `validate_config` warnings (incl. retired model); `_env_bool`/`_env_int` parsing |
 | `test_nlp.py`         | 4       | manifest contents, intent key set, safety markers              |
-| `test_brain.py`       | 10      | `_trim_history` + mocked Gemini transport (no live API)        |
+| `test_brain.py`       | 13      | `_trim_history`, mocked Gemini transport, `describe_image` vision |
 | `test_session.py`     | 11      | `handle_input` / `run`, confirmation callback wiring           |
 | `test_peripherals.py` | 10      | STT engine routing (google/vosk/whisper), transcription parsing |
 | `test_weather.py`     | 5       | Open-Meteo geocode/forecast (mocked HTTP)                      |
-| `test_server.py`      | ~13     | `/api/chat` + confirmation token flow, `/api/confirm`, `/api/state`, `/api/action`, `/api/files`, `/api/transcribe`, `/api/reset`, `/api/health` |
+| `test_server.py`      | ~17     | `/api/chat` + confirmation flow, `/api/confirm`, `/api/state`, `/api/action`, `/api/files`, `/api/screenshot`, `/api/windows`, `/api/transcribe`, `/api/reset`, `/api/health` |
 
 Brain/Gemini live calls are **not** tested (need a real API key), but the transport is
 fully mocked in `test_brain.py` and `test_server.py`.
@@ -422,15 +494,49 @@ fully mocked in `test_brain.py` and `test_server.py`.
 - Docs reframed (README / `project_README` / this document). Python tests: 131;
   frontend tests: 7.
 
+**Round 7 — Computer control suite (v2.4.0):**
+- **Input automation**: `TYPE_TEXT`, `PRESS_KEYS`, `MOVE_MOUSE`, `CLICK_MOUSE`,
+  `SCROLL_MOUSE` via `pyautogui` (lazy-loaded, all `[SAFETY]`), with a
+  clipboard-paste fallback for untypable text.
+- **Screen analysis**: `TAKE_SCREENSHOT` saves PNGs to `SCREENSHOT_DIR`;
+  `READ_SCREEN` feeds the capture to Gemini vision
+  (`KeerthiBrain.describe_image`) via a provider wired in `main.py`/`server.py`;
+  `GET /api/screenshot` serves the latest capture to the dashboard.
+- **Power & display**: `SHUTDOWN`/`RESTART`/`SLEEP`/`LOCK_SCREEN` (subprocess,
+  `[SAFETY]`), `SET_VOLUME`/`MUTE` (pycaw, with old-API fallback),
+  `SET_BRIGHTNESS` (WMI, graceful admin fallback).
+- **Window management**: `LIST_WINDOWS`/`FOCUS_WINDOW`/`MINIMIZE_WINDOW`/
+  `MAXIMIZE_WINDOW`/`CLOSE_WINDOW` (win32gui, Windows-only, graceful no-op
+  elsewhere); app launcher extended (chrome, edge, firefox, settings, terminal,
+  word, excel).
+- **Browser**: `OPEN_URL` and `WEB_SEARCH` via `webbrowser` (no new deps).
+- **Web UI**: Power & Media card (volume/brightness sliders, mute, lock, sleep,
+  restart, shutdown), screenshot capture panel, open-windows list with
+  focus/minimize/maximize/close buttons, browser quick-open box, and an
+  extended app list — all through the existing safety-confirm flow.
+- **Robustness**: Windows-only deps (`pywin32`, `pycaw`, `comtypes`) guarded with
+  PEP 508 platform markers in `requirements.txt`; mypy overrides for the untyped
+  control packages; `screenshots/` git-ignored. Python tests: 208; frontend tests: 7.
+
 ---
 
 ## 11. Known Limitations / Future Work
 
-- **Real system control is powerful** — `KILL_PROCESS` / `RUN_COMMAND` / `OPEN_FILE`
-  act on the actual machine; all destructive intents are gated behind explicit
-  confirmation (CLI prompt or web confirm), and the browser UI mirrors that gate.
-- **`psutil` is the only new runtime dep** — a pure-Python wheel; add
-  `pip install psutil` (already in `requirements.txt`).
+- **Real system control is powerful** — `KILL_PROCESS` / `RUN_COMMAND` /
+  `OPEN_FILE`, input automation, power control, and window closing act on the
+  actual machine; all destructive or input-injecting intents are gated behind
+  explicit confirmation (CLI prompt or web confirm), and the browser UI mirrors
+  that gate.
+- **Windows-only control packages** — `pyautogui`/`Pillow` are cross-platform,
+  but `pywin32`, `pycaw`, and `comtypes` are Windows-only (guarded in
+  `requirements.txt` with `sys_platform == "win32"` markers and lazy-imported).
+  Volume/brightness/window control degrade to a friendly message on other
+  platforms or when no audio endpoint exists.
+- **Brightness may need elevation** — `WmiSetBrightness` can require
+  administrator privileges or a supported display; failures report a graceful
+  message instead of crashing.
+- **`psutil`/`pyautogui`/`Pillow` are the main runtime deps** — all pure-Python
+  wheels; already in `requirements.txt`.
 - **Offline STT needs a model download** — `STT_ENGINE=vosk` needs a Vosk model
   (manual download); `STT_ENGINE=whisper` needs `pip install -r requirements-stt.txt`
   and downloads its model from Hugging Face on first use.

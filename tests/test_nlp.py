@@ -36,6 +36,27 @@ class TestNlpManifest(unittest.TestCase):
                 "REMOVE_TASK",
                 "STATUS_REPORT",
                 "WEATHER_REPORT",
+                "TYPE_TEXT",
+                "PRESS_KEYS",
+                "MOVE_MOUSE",
+                "CLICK_MOUSE",
+                "SCROLL_MOUSE",
+                "TAKE_SCREENSHOT",
+                "READ_SCREEN",
+                "SHUTDOWN",
+                "RESTART",
+                "SLEEP",
+                "LOCK_SCREEN",
+                "SET_VOLUME",
+                "MUTE",
+                "SET_BRIGHTNESS",
+                "LIST_WINDOWS",
+                "FOCUS_WINDOW",
+                "MINIMIZE_WINDOW",
+                "MAXIMIZE_WINDOW",
+                "CLOSE_WINDOW",
+                "OPEN_URL",
+                "WEB_SEARCH",
             },
         )
 
@@ -44,6 +65,11 @@ class TestNlpManifest(unittest.TestCase):
         self.assertIn("[ACTION:KILL_PROCESS] [SAFETY]", manifest)
         self.assertIn("[ACTION:RUN_COMMAND] [SAFETY]", manifest)
         self.assertIn("[ACTION:REMOVE_TASK] [SAFETY]", manifest)
+        self.assertIn("[ACTION:TYPE_TEXT] [SAFETY]", manifest)
+        self.assertIn("[ACTION:SHUTDOWN] [SAFETY]", manifest)
+        self.assertIn("[ACTION:CLOSE_WINDOW] [SAFETY]", manifest)
+        self.assertNotIn("[ACTION:TAKE_SCREENSHOT] [SAFETY]", manifest)
+        self.assertNotIn("[ACTION:OPEN_URL] [SAFETY]", manifest)
         self.assertIn("confirm", manifest)
 
 

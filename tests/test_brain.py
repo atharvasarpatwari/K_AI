@@ -94,6 +94,44 @@ class TestKeerthiBrain(unittest.TestCase):
         brain.reset_conversation()
         self.assertEqual(brain.history, [])
 
+    def test_describe_image_passes_image_to_gemini(self):
+        import os
+        import tempfile
+        from pathlib import Path
+
+        brain = self._make_brain(reply_text="A browser window is open.")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "shot.png")
+            Path(path).write_bytes(b"fake-png-bytes")
+            result = brain.describe_image(path)
+
+        self.assertEqual(result, "A browser window is open.")
+        call_kwargs = brain.client.models.generate_content.call_args.kwargs
+        self.assertEqual(call_kwargs["model"], CONFIG["MODEL_NAME"])
+        contents = call_kwargs["contents"]
+        parts = contents[0].parts
+        self.assertEqual(len(parts), 2)
+        self.assertIn("Describe", parts[0].text)
+        self.assertEqual(parts[1].inline_data.mime_type, "image/png")
+        self.assertEqual(parts[1].inline_data.data, b"fake-png-bytes")
+
+    def test_describe_image_missing_file(self):
+        brain = self._make_brain(reply_text="should not matter")
+        self.assertEqual(brain.describe_image("C:/does/not/exist.png"), "")
+
+    def test_describe_image_swallows_api_exception(self):
+        import os
+        import tempfile
+        from pathlib import Path
+
+        brain = self._make_brain(reply_text="irrelevant")
+        brain.client.models.generate_content.side_effect = RuntimeError("boom")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "shot.png")
+            Path(path).write_bytes(b"png")
+            result = brain.describe_image(path)
+        self.assertEqual(result, "")
+
 
 if __name__ == "__main__":
     unittest.main()

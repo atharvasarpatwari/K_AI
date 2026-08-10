@@ -1,24 +1,36 @@
 import { useEffect, useRef, useState } from 'react'
 import Markdown from 'react-markdown'
 import {
+  AppWindow,
   Bot,
+  Camera,
   CheckCircle2,
   Clock,
   Cpu,
   Database,
   FolderOpen,
   HardDrive,
+  LayoutGrid,
+  Lock,
+  Maximize,
   Mic,
   MicOff,
+  Minimize,
   Monitor,
+  Moon,
   Play,
+  Power,
   RefreshCw,
   Send,
+  Sun,
   Terminal,
   Trash2,
   User,
+  Volume2,
+  VolumeX,
   Wifi,
   WifiOff,
+  X,
 } from 'lucide-react'
 
 type SystemMetrics = {
@@ -43,6 +55,11 @@ type ProcessInfo = {
   name: string
   cpu: number
   memory: number
+}
+
+type WindowInfo = {
+  hwnd: number
+  title: string
 }
 
 type ApiState = {
@@ -76,6 +93,13 @@ const KNOWN_APPS = [
   'powershell',
   'control panel',
   'snipping tool',
+  'chrome',
+  'edge',
+  'firefox',
+  'settings',
+  'terminal',
+  'word',
+  'excel',
 ]
 
 function cleanReply(text: string): string {
@@ -322,7 +346,13 @@ export default function App() {
   const [listening, setListening] = useState(false)
   const [selectedApp, setSelectedApp] = useState(KNOWN_APPS[0])
   const [command, setCommand] = useState('')
+  const [urlInput, setUrlInput] = useState('')
   const [now, setNow] = useState(Date.now())
+  const [volume, setVolume] = useState(50)
+  const [muted, setMuted] = useState(false)
+  const [brightness, setBrightness] = useState(80)
+  const [screenshot, setScreenshot] = useState<string | null>(null)
+  const [windows, setWindows] = useState<WindowInfo[]>([])
   const recorderRef = useRef<MediaRecorder | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
 
@@ -446,6 +476,34 @@ export default function App() {
       setLoading(false)
     }
   }
+
+  async function takeScreenshot() {
+    if (loading) return
+    setLoading(true)
+    try {
+      await postAction('TAKE_SCREENSHOT', [])
+      setScreenshot(`/api/screenshot?t=${Date.now()}`)
+    } catch {
+      pushError()
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function loadWindows() {
+    try {
+      const res = await fetch('/api/windows')
+      if (!res.ok) throw new Error(String(res.status))
+      const data = await res.json()
+      setWindows(data.windows ?? [])
+    } catch {
+      setWindows([])
+    }
+  }
+
+  useEffect(() => {
+    loadWindows()
+  }, [])
 
   async function handleReset() {
     await fetch('/api/reset', { method: 'POST' })
@@ -689,10 +747,88 @@ export default function App() {
               <button
                 onClick={() => runAction('OPEN_APP', [selectedApp])}
                 disabled={loading}
+                aria-label="Open selected app"
                 className="rounded-md bg-cyan-600 px-3 py-1.5 text-sm font-medium hover:bg-cyan-500 disabled:opacity-50"
               >
                 Open
               </button>
+            </div>
+
+            <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <Volume2 className="h-3.5 w-3.5" /> Power &amp; Media
+            </h3>
+            <div className="mb-4 space-y-2.5 rounded-md border border-slate-800 p-3">
+              <div className="flex items-center gap-2">
+                <Volume2 className="h-4 w-4 shrink-0 text-slate-400" />
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={volume}
+                  onChange={(e) => setVolume(Number(e.target.value))}
+                  onPointerUp={() => runAction('SET_VOLUME', [String(volume)])}
+                  className="flex-1 accent-cyan-500"
+                  aria-label="Volume"
+                />
+                <button
+                  onClick={() => {
+                    setMuted(!muted)
+                    runAction('MUTE', [muted ? 'off' : 'on'])
+                  }}
+                  disabled={loading}
+                  className="text-slate-400 hover:text-slate-200 disabled:opacity-40"
+                  title={muted ? 'Unmute' : 'Mute'}
+                >
+                  {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <Sun className="h-4 w-4 shrink-0 text-slate-400" />
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={brightness}
+                  onChange={(e) => setBrightness(Number(e.target.value))}
+                  onPointerUp={() => runAction('SET_BRIGHTNESS', [String(brightness)])}
+                  className="flex-1 accent-cyan-500"
+                  aria-label="Brightness"
+                />
+              </div>
+              <div className="flex gap-1.5 pt-0.5">
+                <button
+                  onClick={() => runAction('LOCK_SCREEN')}
+                  disabled={loading}
+                  className="flex-1 rounded-md bg-slate-800 px-2 py-1.5 text-xs hover:bg-slate-700 disabled:opacity-40"
+                  title="Lock screen"
+                >
+                  <Lock className="mx-auto h-4 w-4" />
+                </button>
+                <button
+                  onClick={() => runAction('SLEEP')}
+                  disabled={loading}
+                  className="flex-1 rounded-md bg-slate-800 px-2 py-1.5 text-xs hover:bg-slate-700 disabled:opacity-40"
+                  title="Sleep"
+                >
+                  <Moon className="mx-auto h-4 w-4" />
+                </button>
+                <button
+                  onClick={() => runAction('RESTART')}
+                  disabled={loading}
+                  className="flex-1 rounded-md bg-slate-800 px-2 py-1.5 text-xs hover:bg-slate-700 disabled:opacity-40"
+                  title="Restart"
+                >
+                  <RefreshCw className="mx-auto h-4 w-4" />
+                </button>
+                <button
+                  onClick={() => runAction('SHUTDOWN')}
+                  disabled={loading}
+                  className="flex-1 rounded-md bg-red-950/60 px-2 py-1.5 text-xs hover:bg-red-900/60 disabled:opacity-40"
+                  title="Shut down"
+                >
+                  <Power className="mx-auto h-4 w-4" />
+                </button>
+              </div>
             </div>
 
             <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -726,10 +862,76 @@ export default function App() {
             </div>
 
             <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <Wifi className="h-3.5 w-3.5" /> Browser
+            </h3>
+            <div className="mb-4 flex gap-2">
+              <input
+                value={urlInput}
+                onChange={(e) => setUrlInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && urlInput.trim()) {
+                    runAction('OPEN_URL', [urlInput])
+                    setUrlInput('')
+                  }
+                }}
+                placeholder="URL or search…"
+                className="min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-900 px-2 py-1.5 text-sm outline-none focus:border-cyan-500"
+              />
+              <button
+                onClick={() => {
+                  if (urlInput.trim()) {
+                    runAction('OPEN_URL', [urlInput])
+                    setUrlInput('')
+                  }
+                }}
+                disabled={loading || !urlInput.trim()}
+                aria-label="Open URL"
+                className="rounded-md bg-cyan-600 px-2.5 py-1.5 text-sm font-medium hover:bg-cyan-500 disabled:opacity-50"
+                title="Open URL"
+              >
+                Open
+              </button>
+              <button
+                onClick={() => {
+                  if (urlInput.trim()) {
+                    runAction('WEB_SEARCH', [urlInput])
+                    setUrlInput('')
+                  }
+                }}
+                disabled={loading || !urlInput.trim()}
+                aria-label="Web search"
+                className="rounded-md bg-slate-800 px-2.5 py-1.5 text-sm hover:bg-slate-700 disabled:opacity-50"
+                title="Web search"
+              >
+                Search
+              </button>
+            </div>
+
+            <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
               <FolderOpen className="h-3.5 w-3.5" /> Files
             </h3>
             <div className="mb-4">
               <FileBrowser />
+            </div>
+
+            <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <Camera className="h-3.5 w-3.5" /> Screenshot
+            </h3>
+            <div className="mb-4">
+              <button
+                onClick={takeScreenshot}
+                disabled={loading}
+                className="w-full rounded-md bg-slate-800 px-3 py-1.5 text-sm hover:bg-slate-700 disabled:opacity-50"
+              >
+                Capture screen
+              </button>
+              {screenshot && (
+                <img
+                  src={screenshot}
+                  alt="Screen capture"
+                  className="mt-2 w-full rounded-md border border-slate-800"
+                />
+              )}
             </div>
 
             <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -767,6 +969,66 @@ export default function App() {
                   ))}
                 </tbody>
               </table>
+            </div>
+
+            <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <AppWindow className="h-3.5 w-3.5" /> Windows
+            </h3>
+            <div className="mb-4">
+              <button
+                onClick={loadWindows}
+                className="mb-2 w-full rounded-md bg-slate-800 px-3 py-1.5 text-sm hover:bg-slate-700"
+              >
+                Refresh windows
+              </button>
+              {windows.length === 0 ? (
+                <p className="text-sm text-slate-500">No open windows.</p>
+              ) : (
+                <ul className="max-h-40 space-y-1 overflow-y-auto rounded-md border border-slate-800 p-2">
+                  {windows.map((w) => (
+                    <li
+                      key={w.hwnd}
+                      className="flex items-center gap-1.5 text-xs"
+                    >
+                      <span className="min-w-0 flex-1 truncate text-slate-300" title={w.title}>
+                        {w.title}
+                      </span>
+                      <button
+                        onClick={() => runAction('FOCUS_WINDOW', [w.title])}
+                        disabled={loading}
+                        className="text-slate-400 hover:text-cyan-300 disabled:opacity-40"
+                        title="Focus"
+                      >
+                        <LayoutGrid className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        onClick={() => runAction('MINIMIZE_WINDOW', [w.title])}
+                        disabled={loading}
+                        className="text-slate-400 hover:text-amber-300 disabled:opacity-40"
+                        title="Minimize"
+                      >
+                        <Minimize className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        onClick={() => runAction('MAXIMIZE_WINDOW', [w.title])}
+                        disabled={loading}
+                        className="text-slate-400 hover:text-emerald-300 disabled:opacity-40"
+                        title="Maximize"
+                      >
+                        <Maximize className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        onClick={() => runAction('CLOSE_WINDOW', [w.title])}
+                        disabled={loading}
+                        className="text-slate-400 hover:text-red-300 disabled:opacity-40"
+                        title="Close"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
 
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">

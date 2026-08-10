@@ -18,9 +18,46 @@ COMMAND_INTENTS = {
     "REMOVE_TASK": "Remove a task by name (e.g. REMOVE_TASK:Water the plants).",
     "STATUS_REPORT": "Report the current system status and task list.",
     "WEATHER_REPORT": "Report the current weather for the user's location.",
+    "TYPE_TEXT": "Type text as if on the keyboard (e.g. TYPE_TEXT:hello world).",
+    "PRESS_KEYS": "Press a keyboard shortcut (e.g. PRESS_KEYS:ctrl+c, PRESS_KEYS:win+d).",
+    "MOVE_MOUSE": "Move the mouse cursor to screen coordinates (e.g. MOVE_MOUSE:500:400).",
+    "CLICK_MOUSE": "Click the mouse (e.g. CLICK_MOUSE:500:400, CLICK_MOUSE:right).",
+    "SCROLL_MOUSE": "Scroll the mouse wheel (e.g. SCROLL_MOUSE:up, SCROLL_MOUSE:down:5).",
+    "TAKE_SCREENSHOT": "Capture the screen and save an image, reporting the file path.",
+    "READ_SCREEN": "Take a screenshot and describe what is currently on the screen.",
+    "SHUTDOWN": "Shut down the computer.",
+    "RESTART": "Restart the computer.",
+    "SLEEP": "Put the computer to sleep.",
+    "LOCK_SCREEN": "Lock the computer screen.",
+    "SET_VOLUME": "Set the system volume to a percentage (e.g. SET_VOLUME:50).",
+    "MUTE": "Mute or unmute the system volume (e.g. MUTE:on).",
+    "SET_BRIGHTNESS": "Set the screen brightness to a percentage (e.g. SET_BRIGHTNESS:70).",
+    "LIST_WINDOWS": "List the open application windows.",
+    "FOCUS_WINDOW": "Bring a window to the front (e.g. FOCUS_WINDOW:Notepad).",
+    "MINIMIZE_WINDOW": "Minimize a window (e.g. MINIMIZE_WINDOW:Notepad).",
+    "MAXIMIZE_WINDOW": "Maximize a window (e.g. MAXIMIZE_WINDOW:Notepad).",
+    "CLOSE_WINDOW": "Close a window (e.g. CLOSE_WINDOW:Notepad).",
+    "OPEN_URL": "Open a URL in the default browser (e.g. OPEN_URL:https://example.com).",
+    "WEB_SEARCH": "Search the web in the default browser (e.g. WEB_SEARCH:best AI models).",
 }
 
-SAFETY_INTENTS = frozenset({"KILL_PROCESS", "RUN_COMMAND", "REMOVE_TASK"})
+SAFETY_INTENTS = frozenset(
+    {
+        "KILL_PROCESS",
+        "RUN_COMMAND",
+        "REMOVE_TASK",
+        "TYPE_TEXT",
+        "PRESS_KEYS",
+        "MOVE_MOUSE",
+        "CLICK_MOUSE",
+        "SCROLL_MOUSE",
+        "SHUTDOWN",
+        "RESTART",
+        "SLEEP",
+        "LOCK_SCREEN",
+        "CLOSE_WINDOW",
+    }
+)
 
 
 def get_nlp_manifest() -> str:

@@ -16,6 +16,14 @@ speech-to-text.
 - **Gemini-powered conversation** — calm, witty, proactive persona.
 - **Full machine access** — live CPU/memory/disk/battery metrics, top-CPU process
   listing, process termination, known-app launcher, command runner, and file browsing.
+- **Input automation** — type text, press hotkeys, move/click/scroll the mouse
+  (pyautogui, safety-confirmed).
+- **Screen analysis** — capture screenshots and have the model describe what is on
+  the screen (Gemini vision via `READ_SCREEN`).
+- **Power & display control** — shutdown, restart, sleep, lock screen, volume,
+  mute, and brightness.
+- **Window management** — list, focus, minimize, maximize, and close open windows.
+- **Browser automation** — open URLs and run web searches in the default browser.
 - **Timers** — set, check, and cancel timers; expiry announced via speech.
 - **Weather reports** — current conditions for your location (Open-Meteo, no API key).
 - **State persistence** — task/timer state survives restarts via `keerthi_state.json`.
@@ -23,10 +31,10 @@ speech-to-text.
   faster-whisper (`STT_ENGINE=whisper`) optional.
 - **Text-to-speech** — spoken replies via `pyttsx3`.
 - **Safety confirmation** — destructive actions (killing processes, running commands,
-  removing tasks) ask before executing.
+  typing/clicking, power control, closing windows, removing tasks) ask before executing.
 - **Web interface** — chat + live system dashboard (FastAPI + React) with
   WebSocket push for state changes and timer expiries.
-- **CI + static checks** — GitHub Actions runs ruff, mypy, 131+ tests, and the web lint/test/build.
+- **CI + static checks** — GitHub Actions runs ruff, mypy, 208+ tests, and the web lint/test/build.
 
 ## Installation
 
@@ -71,13 +79,18 @@ expiries to the dashboard.
 `SYSTEM_STATUS`, `CPU_USAGE`, `MEMORY_USAGE`, `DISK_USAGE`, `BATTERY_STATUS`,
 `LIST_PROCESSES`, `KILL_PROCESS`, `OPEN_APP`, `RUN_COMMAND`, `FILE_LIST`,
 `OPEN_FILE`, `ADD_TASK`, `REMOVE_TASK`, `STATUS_REPORT`, `WEATHER_REPORT`,
-`SET_TIMER`, `CANCEL_TIMER`, `CHECK_TIMERS`, `RESET_STATE`
+`SET_TIMER`, `CANCEL_TIMER`, `CHECK_TIMERS`, `RESET_STATE`,
+`TYPE_TEXT`, `PRESS_KEYS`, `MOVE_MOUSE`, `CLICK_MOUSE`, `SCROLL_MOUSE`,
+`TAKE_SCREENSHOT`, `READ_SCREEN`, `SHUTDOWN`, `RESTART`, `SLEEP`, `LOCK_SCREEN`,
+`SET_VOLUME`, `MUTE`, `SET_BRIGHTNESS`, `LIST_WINDOWS`, `FOCUS_WINDOW`,
+`MINIMIZE_WINDOW`, `MAXIMIZE_WINDOW`, `CLOSE_WINDOW`, `OPEN_URL`, `WEB_SEARCH`
 
 ## Configuration (all optional, via `.env`)
 
 `MODEL_NAME`, `TTS_RATE`, `USE_MICROPHONE`, `STT_LANGUAGE`, `STT_ENGINE`,
 `VOSK_MODEL_PATH`, `WHISPER_MODEL`, `WHISPER_DEVICE`, `MAX_HISTORY_TURNS`,
-`TEMPERATURE`, `MAX_OUTPUT_TOKENS`, `TOP_P`, `LOG_LEVEL`, `STATE_FILE`
+`TEMPERATURE`, `MAX_OUTPUT_TOKENS`, `TOP_P`, `LOG_LEVEL`, `STATE_FILE`,
+`SCREENSHOT_DIR`
 
 ## Development
 
@@ -100,15 +113,15 @@ npm run build
 ├── main.py                CLI entry point + conversation loop
 ├── keerthi/
 │   ├── config.py          CONFIG TypedDict, env helpers, validation
-│   ├── brain.py           KeerthiBrain — Gemini client + history
+│   ├── brain.py           KeerthiBrain — Gemini client + history + vision
 │   ├── executive.py       ExecutiveOfficer — actions, timers, persistence
 │   ├── peripherals.py     PeripheralController — TTS / STT / console
 │   ├── nlp.py             intents + manifest builder
-│   ├── system.py          real system control (psutil)
+│   ├── system.py          real system control (psutil, pyautogui, win32)
 │   ├── server.py          FastAPI web backend
 │   └── services/weather.py  Open-Meteo weather lookup
 ├── src/                   React frontend (chat + system dashboard)
-└── tests/                 131 unit tests (stdlib unittest)
+└── tests/                 208 unit tests (stdlib unittest)
 ```
 
 ## Customization

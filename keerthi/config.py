@@ -50,12 +50,13 @@ class ConfigDict(TypedDict):
     TOP_P: float
     LOG_LEVEL: str
     STATE_FILE: str
+    SCREENSHOT_DIR: str
 
 
 CONFIG: ConfigDict = {
     "NAME": "KEERTHI",
     "FULL_NAME": "Knowledge-Enhanced Engine for Real-Time Human Intelligence",
-    "VERSION": "2.3.0",
+    "VERSION": "2.4.0",
     "USER_NAME": "Atharva",
     "LOCATION": "Hyderabad, India",
     "GEMINI_API_KEY": os.getenv("GEMINI_API_KEY"),
@@ -74,6 +75,7 @@ CONFIG: ConfigDict = {
     "TOP_P": _env_float("TOP_P", 0.95),
     "LOG_LEVEL": os.getenv("LOG_LEVEL", "INFO").upper(),
     "STATE_FILE": os.getenv("STATE_FILE", "keerthi_state.json"),
+    "SCREENSHOT_DIR": os.getenv("SCREENSHOT_DIR", "screenshots"),
 }
 
 # Initial state for tasks and timers (system metrics are always live)
@@ -163,6 +165,13 @@ def validate_config() -> None:
     if CONFIG["STT_ENGINE"] not in ("google", "vosk", "whisper"):
         warnings.warn(
             f"STT_ENGINE '{CONFIG['STT_ENGINE']}' unknown — using google.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    if not CONFIG["SCREENSHOT_DIR"]:
+        warnings.warn(
+            "SCREENSHOT_DIR is empty — using 'screenshots'.",
             RuntimeWarning,
             stacklevel=2,
         )

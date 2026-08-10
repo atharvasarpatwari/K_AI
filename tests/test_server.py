@@ -151,7 +151,7 @@ class TestServerEndpoints(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["status"], "ok")
-        self.assertEqual(payload["version"], "2.3.0")
+        self.assertEqual(payload["version"], "2.4.0")
         self.assertIn("apiKeyPresent", payload)
 
     def test_transcribe_audio(self):
@@ -176,6 +176,52 @@ class TestServerEndpoints(unittest.TestCase):
         response = self.client.post("/api/transcribe", content=b"")
         self.assertEqual(response.status_code, 400)
         controller._transcribe.assert_not_called()
+
+    def test_screenshot_returns_latest_png(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            shot = f"{tmp}/a.png"
+            with open(shot, "wb") as f:
+                f.write(b"png-data")
+            with mock.patch(
+                "keerthi.server.system.latest_screenshot",
+                return_value=shot,
+            ):
+                response = self.client.get("/api/screenshot")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "image/png")
+        self.assertEqual(response.content, b"png-data")
+
+    def test_screenshot_404_when_none_available(self):
+        with mock.patch("keerthi.server.system.latest_screenshot", return_value=""):
+            response = self.client.get("/api/screenshot")
+        self.assertEqual(response.status_code, 404)
+
+    def test_windows_endpoint(self):
+        rows = [{"hwnd": 10, "title": "Notepad"}]
+        with mock.patch("keerthi.server.system.list_windows", return_value=rows):
+            response = self.client.get("/api/windows")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"windows": rows})
+
+    def test_chat_wires_vision_provider(self):
+        self.brain.generate_response.return_value = "Looking now."
+        self.officer.parse_and_execute.return_value = ["Screenshot saved to X."]
+        response = self.client.post("/api/chat", json={"message": "read screen"})
+        self.assertEqual(response.status_code, 200)
+        self.officer.set_vision_provider.assert_called_once_with(
+            self.brain.describe_image
+        )
+        self.assertEqual(response.json()["actions"], ["Screenshot saved to X."])
+
+    def test_action_wires_vision_provider(self):
+        self.officer.parse_and_execute.return_value = ["Screenshot saved to X."]
+        response = self.client.post(
+            "/api/action", json={"intent": "TAKE_SCREENSHOT", "args": []}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.officer.set_vision_provider.assert_called_once()
 
 
 if __name__ == "__main__":

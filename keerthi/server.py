@@ -14,6 +14,7 @@ from contextlib import suppress
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from keerthi import system
@@ -26,7 +27,7 @@ from keerthi.executive import (
 )
 from keerthi.peripherals import PeripheralController
 
-app = FastAPI(title="KEERTHI API", version="2.3.0")
+app = FastAPI(title="KEERTHI API", version="2.4.0")
 
 _brain: KeerthiBrain | None = None
 _officer: ExecutiveOfficer | None = None
@@ -147,6 +148,7 @@ def chat(request: ChatRequest) -> ChatResponse:
     """Processes one user message through the brain and executive."""
     brain = get_brain()
     officer = get_officer()
+    officer.set_vision_provider(brain.describe_image)
 
     reply = brain.generate_response(request.message)
     intents = extract_intents(reply)
@@ -209,6 +211,8 @@ def confirm(request: ConfirmRequest) -> ChatResponse:
 def run_action(request: ActionRequest) -> ChatResponse:
     """Executes a system intent directly (no LLM round-trip)."""
     officer = get_officer()
+    with suppress(ValueError):
+        officer.set_vision_provider(get_brain().describe_image)
     tag = f"[ACTION:{request.intent}"
     if request.args:
         tag += ":" + ":".join(request.args)
@@ -246,6 +250,21 @@ def run_action(request: ActionRequest) -> ChatResponse:
 def list_files(path: str = ".") -> dict[str, Any]:
     """Lists a directory for the browser file explorer."""
     return system.list_directory(path)
+
+
+@app.get("/api/screenshot")
+def get_screenshot() -> FileResponse:
+    """Returns the most recent screenshot as a PNG."""
+    path = system.latest_screenshot()
+    if not path:
+        raise HTTPException(status_code=404, detail="No screenshot available yet.")
+    return FileResponse(path, media_type="image/png")
+
+
+@app.get("/api/windows")
+def get_windows() -> dict[str, Any]:
+    """Returns the open top-level windows for the browser dashboard."""
+    return {"windows": system.list_windows()}
 
 
 @app.post("/api/transcribe")

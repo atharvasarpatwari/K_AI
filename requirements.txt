@@ -6,3 +6,8 @@ SpeechRecognition
 pyaudio
 requests
 psutil>=5.9
+pyautogui
+Pillow
+pywin32; sys_platform == "win32"
+pycaw; sys_platform == "win32"
+comtypes; sys_platform == "win32"

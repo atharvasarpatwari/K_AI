@@ -152,7 +152,7 @@ describe('App', () => {
     expect(await screen.findByText('test-pc')).toBeTruthy()
     expect(await screen.findByText('42')).toBeTruthy()
     expect(await screen.findByText('80')).toBeTruthy()
-    expect(await screen.findByText('chrome')).toBeTruthy()
+    expect((await screen.findAllByText('chrome')).length).toBeGreaterThan(0)
     expect(await screen.findByText('90%')).toBeTruthy()
   })
 
@@ -186,7 +186,7 @@ describe('App', () => {
 
     const user = userEvent.setup()
     render(<App />)
-    await user.click(await screen.findByRole('button', { name: /^Open$/ }))
+    await user.click(await screen.findByRole('button', { name: /Open selected app/ }))
 
     const actionCall = fetchMock.mock.calls.find(([url]) => String(url) === '/api/action')
     expect(actionCall).toBeTruthy()
