@@ -69,6 +69,14 @@ class TestExecutiveOfficer(unittest.TestCase):
         self.assertEqual(executed, [])
         self.assertEqual(self.officer.state["devices"]["bedroom_ac"]["temp"], 22)
 
+    def test_set_temp_clamped_to_min(self):
+        self.officer.parse_and_execute("[ACTION:SET_TEMP:5]")
+        self.assertEqual(self.officer.state["devices"]["bedroom_ac"]["temp"], 16)
+
+    def test_set_temp_clamped_to_max(self):
+        self.officer.parse_and_execute("[ACTION:SET_TEMP:99]")
+        self.assertEqual(self.officer.state["devices"]["bedroom_ac"]["temp"], 30)
+
     def test_fan_on_off(self):
         self.officer.parse_and_execute("[ACTION:FAN_ON]")
         self.assertEqual(self.officer.state["devices"]["kitchen_fan"]["status"], "on")
@@ -188,6 +196,37 @@ class TestExecutiveOfficer(unittest.TestCase):
         self.assertTrue(self.officer._running)
         self.officer.stop()
         self.assertFalse(self.officer._running)
+
+    def test_stale_timers_pruned_on_load(self):
+        import json
+
+        path = os.path.join(self.tmp.name, "stale.json")
+        state = {
+            "devices": {},
+            "tasks": [],
+            "timers": [
+                {"label": "Old", "due": time.time() - 3600},
+                {"label": "New", "due": time.time() + 3600},
+            ],
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+        officer = ExecutiveOfficer(state_file=path)
+        self.assertEqual([t["label"] for t in officer.state["timers"]], ["New"])
+
+    def test_timer_within_grace_kept_on_load(self):
+        import json
+
+        path = os.path.join(self.tmp.name, "grace.json")
+        state = {
+            "devices": {},
+            "tasks": [],
+            "timers": [{"label": "Recent", "due": time.time() - 30}],
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+        officer = ExecutiveOfficer(state_file=path)
+        self.assertEqual([t["label"] for t in officer.state["timers"]], ["Recent"])
 
     def test_lock_door(self):
         executed = self.officer.parse_and_execute("[ACTION:LOCK_DOOR]")

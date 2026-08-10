@@ -1,3 +1,4 @@
+import logging
 import unittest
 from unittest import mock
 
@@ -35,6 +36,10 @@ class TestGeocode(unittest.TestCase):
 
 
 class TestFetchWeather(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        logging.getLogger("keerthi.services.weather").setLevel(logging.CRITICAL)
+
     def _mock_requests(self, geo_payload, forecast_payload):
         def side_effect(url, **_):
             if "geocoding" in url:

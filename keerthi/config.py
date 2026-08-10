@@ -42,6 +42,8 @@ class ConfigDict(TypedDict):
     STT_LANGUAGE: str
     STT_ENGINE: str
     VOSK_MODEL_PATH: str
+    WHISPER_MODEL: str
+    WHISPER_DEVICE: str
     MAX_HISTORY_TURNS: int
     TEMPERATURE: float
     MAX_OUTPUT_TOKENS: int
@@ -53,17 +55,19 @@ class ConfigDict(TypedDict):
 CONFIG: ConfigDict = {
     "NAME": "KEERTHI",
     "FULL_NAME": "Knowledge-Enhanced Engine for Real-Time Human Intelligence",
-    "VERSION": "2.1.0",
+    "VERSION": "2.2.0",
     "USER_NAME": "Atharva",
     "LOCATION": "Hyderabad, India",
     "GEMINI_API_KEY": os.getenv("GEMINI_API_KEY"),
-    "MODEL_NAME": os.getenv("MODEL_NAME", "gemini-1.5-flash"),
+    "MODEL_NAME": os.getenv("MODEL_NAME", "gemini-2.5-flash"),
     "TTS_RATE": _env_int("TTS_RATE", 175),
     "WAKE_WORDS": ["keerthi", "hey keerthi", "ok keerthi"],
     "USE_MICROPHONE": _env_bool("USE_MICROPHONE", True),
     "STT_LANGUAGE": os.getenv("STT_LANGUAGE", "en-IN"),
     "STT_ENGINE": os.getenv("STT_ENGINE", "google").lower(),
     "VOSK_MODEL_PATH": os.getenv("VOSK_MODEL_PATH", "vosk-model-small-en-us-0.15"),
+    "WHISPER_MODEL": os.getenv("WHISPER_MODEL", "small.en"),
+    "WHISPER_DEVICE": os.getenv("WHISPER_DEVICE", "auto").lower(),
     "MAX_HISTORY_TURNS": _env_int("MAX_HISTORY_TURNS", 10),
     "TEMPERATURE": _env_float("TEMPERATURE", 0.7),
     "MAX_OUTPUT_TOKENS": _env_int("MAX_OUTPUT_TOKENS", 1024),
@@ -92,6 +96,7 @@ INITIAL_STATE = {
 }
 
 _VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+_RETIRED_MODEL_PREFIXES = ("gemini-1.5", "gemini-2.0-flash")
 
 
 def validate_config() -> None:
@@ -99,6 +104,14 @@ def validate_config() -> None:
     if not CONFIG["GEMINI_API_KEY"]:
         warnings.warn(
             "GEMINI_API_KEY is missing — brain calls will fail at runtime.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    if CONFIG["MODEL_NAME"].startswith(_RETIRED_MODEL_PREFIXES):
+        warnings.warn(
+            f"MODEL_NAME '{CONFIG['MODEL_NAME']}' is retired — use a current model "
+            "such as gemini-2.5-flash.",
             RuntimeWarning,
             stacklevel=2,
         )
@@ -145,7 +158,7 @@ def validate_config() -> None:
             stacklevel=2,
         )
 
-    if CONFIG["STT_ENGINE"] not in ("google", "vosk"):
+    if CONFIG["STT_ENGINE"] not in ("google", "vosk", "whisper"):
         warnings.warn(
             f"STT_ENGINE '{CONFIG['STT_ENGINE']}' unknown — using google.",
             RuntimeWarning,

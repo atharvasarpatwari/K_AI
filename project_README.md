@@ -1,6 +1,6 @@
 # KEERTHI AI Voice Assistant (Python Suite)
 
-A highly advanced, conversational voice assistant powered by **Gemini 1.5 Flash**.
+A highly advanced, conversational voice assistant powered by **Gemini 2.5 Flash**.
 
 ## Features
 - **Intelligent Conversations**: Powered by Google's state-of-the-art LLMs.
@@ -43,11 +43,14 @@ A highly advanced, conversational voice assistant powered by **Gemini 1.5 Flash*
 
 ## Supported Smart-Home Actions
 `LIGHT_ON`, `LIGHT_OFF`, `SET_BRIGHTNESS`, `AC_ON`, `AC_OFF`, `SET_TEMP`,
-`FAN_ON`, `FAN_OFF`, `FAN_SPEED`, `LOCK_DOOR`, `UNLOCK_DOOR`,
-`ADD_TASK`, `REMOVE_TASK`, `STATUS_REPORT`
+`FAN_ON`, `FAN_OFF`, `FAN_SPEED`, `TV_ON`, `TV_OFF`, `CURTAIN_OPEN`,
+`CURTAIN_CLOSE`, `HEATER_ON`, `HEATER_OFF`, `HEATER_TEMP`, `LOCK_DOOR`,
+`UNLOCK_DOOR`, `ADD_TASK`, `REMOVE_TASK`, `STATUS_REPORT`, `WEATHER_REPORT`,
+`SET_TIMER`, `CANCEL_TIMER`, `CHECK_TIMERS`, `RESET_STATE`
 
 ## Configuration (all optional, via `.env`)
-`MODEL_NAME`, `TTS_RATE`, `USE_MICROPHONE`, `STT_LANGUAGE`, `MAX_HISTORY_TURNS`,
+`MODEL_NAME`, `TTS_RATE`, `USE_MICROPHONE`, `STT_LANGUAGE`, `STT_ENGINE`,
+`VOSK_MODEL_PATH`, `WHISPER_MODEL`, `WHISPER_DEVICE`, `MAX_HISTORY_TURNS`,
 `TEMPERATURE`, `MAX_OUTPUT_TOKENS`, `TOP_P`, `LOG_LEVEL`, `STATE_FILE`
 
 ## Running Tests

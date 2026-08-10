@@ -1,13 +1,13 @@
 # KEERTHI AI — Project Documentation (for review)
 
-**Document date:** 2026-08-09 · **Version:** 2.1.0 · **Language:** Python 3.13
+**Document date:** 2026-08-10 · **Version:** 2.2.0 · **Language:** Python 3.13
 
 ---
 
 ## 1. Overview
 
 KEERTHI (*Knowledge-Enhanced Engine for Real-Time Human Intelligence*) is a
-conversational voice assistant for Windows, powered by **Google Gemini 1.5 Flash**.
+conversational voice assistant for Windows, powered by **Google Gemini 2.5 Flash**.
 It combines:
 
 - an LLM "brain" for natural conversation,
@@ -135,7 +135,8 @@ Clean separation of concerns:
   confirmation strings, and **persists state** when any action executed.
 - Handlers (all typed `(args: list[str]) -> str | None`; `None` = no confirmation):
   - Lighting: `LIGHT_ON`, `LIGHT_OFF`, `SET_BRIGHTNESS` (clamped 0–100; 0 ⇒ off)
-  - Climate: `AC_ON`, `AC_OFF`, `SET_TEMP` (defaults 22 when no arg; non-numeric ignored)
+  - Climate: `AC_ON`, `AC_OFF`, `SET_TEMP` (clamped 16–30, defaults 22 when no arg;
+    non-numeric ignored)
   - Fan: `FAN_ON`, `FAN_OFF`, `FAN_SPEED` (clamped 0–5; 0 ⇒ off)
   - Security: `LOCK_DOOR`, `UNLOCK_DOOR`
   - Tasks: `ADD_TASK` (strips whitespace, default "New Task"), `REMOVE_TASK`
@@ -143,9 +144,16 @@ Clean separation of concerns:
   - Reporting: `STATUS_REPORT` (human-readable device + task summary)
 - Helpers: `_first_int(args, default=None)` extracts the first integer from args
   (default only applied when args are empty); `_clamp(value, low, high)`.
+- Timers: `_prune_stale_timers()` drops timers whose `due` is more than
+  `TIMER_STALE_GRACE_SECONDS` (60 s) in the past on startup, so a timer that
+  expired while the process was down is dropped instead of firing late. Timer
+  list mutations and `_fire_due_timers()` are guarded by a reentrant lock
+  (`self._lock`) so the scheduler thread never races the main/web threads.
 - Persistence: `_load_state()` on init (ignores missing/corrupt files) and
-  `_save_state()` after actions, to `STATE_FILE` (default `keerthi_state.json`).
-- Constants: `MAX_FAN_SPEED = 5`, `MAX_BRIGHTNESS = 100`.
+  `_save_state()` after actions (lock-protected), to `STATE_FILE`
+  (default `keerthi_state.json`).
+- Constants: `MAX_FAN_SPEED = 5`, `MAX_BRIGHTNESS = 100`, `MIN_AC_TEMP = 16`,
+  `MAX_AC_TEMP = 30`, `MAX_HEATER_TEMP = 50`.
 
 ### 4.4 `keerthi/peripherals.py` — `PeripheralController`
 - `_init_tts()`: initializes `pyttsx3` (guarded), applies `TTS_RATE`; sets
@@ -156,14 +164,20 @@ Clean separation of concerns:
   available) speaks via pyttsx3.
 - `listen(use_microphone=None)`: mic STT first (unless disabled), falls back to
   text `input()` on any failure. Honors `CONFIG["USE_MICROPHONE"]`.
-- `_listen_microphone()`: `adjust_for_ambient_noise` → capture → `recognize_google`
-  with `STT_LANGUAGE`. Graceful handling of `UnknownValueError` / `RequestError`.
+- `_listen_microphone()`: `adjust_for_ambient_noise` → capture → transcribe.
+  Graceful handling of `UnknownValueError` / `RequestError`.
+- `_transcribe(audio)`: routes to the configured engine — `google`
+  (`recognize_google`), `vosk`, or `whisper` — falling back to Google on empty.
+- `_transcribe_vosk(audio)`: lazy `vosk.Model` + `KaldiRecognizer` (16 kHz PCM).
+- `_transcribe_whisper(audio)`: lazy `faster_whisper.WhisperModel`
+  (`WHISPER_MODEL`/`WHISPER_DEVICE`); converts int16 PCM → float32 via NumPy;
+  transcribes with the `STT_LANGUAGE` base code; falls back to Google on error.
 - `close()`: stops the TTS engine (called at end of session).
 - `show_dashboard(state)`: prints a status table using `.get('status', 'unknown')`
   so missing keys don't crash.
 
 ### 4.5 `keerthi/nlp.py`
-- `COMMAND_INTENTS`: 14 intents with descriptions (single source of truth for the
+- `COMMAND_INTENTS`: 26 intents with descriptions (single source of truth for the
   command library).
 - `get_nlp_manifest() -> str`: renders the intents as the `[ACTION]` block injected
   into the system prompt.
@@ -184,6 +198,26 @@ Clean separation of concerns:
   unless `--fresh`), peripherals, then runs a `ConversationSession`.
 - Top-level: `KeyboardInterrupt` → graceful exit.
 
+### 4.7 `keerthi/server.py` — FastAPI web backend
+- Lazy module singletons `_brain` / `_officer` (see §11 limitation: single worker).
+- Endpoints:
+  - `GET /api/health` — readiness probe (`status`, `version`, `apiKeyPresent`).
+  - `GET /api/state` — current smart-home state.
+  - `POST /api/reset` — clears conversation history.
+  - `POST /api/chat` — brain → executive flow. When a reply contains a
+    `SAFETY_INTENTS` action and `confirmed` is false, it does **not** execute;
+    instead it stores `{reply, intents}` under a single-use `confirmationToken`
+    and returns `needsConfirmation: true` (no duplicate LLM call on confirm).
+  - `POST /api/confirm` — `{token, confirmed}` executes the **stored** reply's
+    intents via `parse_and_execute` without re-generating; unknown tokens → 404;
+    `confirmed: false` discards the pending action.
+  - `GET /api/ws` — WebSocket pushing `{"type":"state"}` snapshots and
+    `{"type":"timer"}` expiry events to connected dashboards.
+- `_broadcast` is wired as the officer's notifier; it schedules pushes onto the
+  event loop via `asyncio.run_coroutine_threadsafe` (safe from the scheduler thread).
+- `startup`/`shutdown` events capture the loop and stop the officer's scheduler
+  thread on shutdown.
+
 ---
 
 ## 5. Configuration
@@ -193,12 +227,14 @@ All optional — read from `.env` (see `.env.example`), with defaults shown:
 | Var                | Default           | Purpose                                  |
 | ------------------ | ----------------- | ---------------------------------------- |
 | `GEMINI_API_KEY`   | *(required)*      | Gemini API key (missing ⇒ startup error) |
-| `MODEL_NAME`       | `gemini-1.5-flash`| Gemini model                              |
+| `MODEL_NAME`       | `gemini-2.5-flash`| Gemini model                              |
 | `TTS_RATE`         | `175`             | Speech rate (validated 50–400)           |
 | `USE_MICROPHONE`   | `true`            | Enable mic STT (falls back to typing)    |
 | `STT_LANGUAGE`     | `en-IN`           | Speech-recognition language              |
-| `STT_ENGINE`       | `google`          | `google` (online) or `vosk` (offline)    |
+| `STT_ENGINE`       | `google`          | `google` (online), `vosk`/`whisper` (offline) |
 | `VOSK_MODEL_PATH`  | `vosk-model-small-en-us-0.15` | Vosk model directory            |
+| `WHISPER_MODEL`    | `small.en`        | faster-whisper model (e.g. `small.en`) |
+| `WHISPER_DEVICE`   | `auto`            | faster-whisper device (`auto`/`cpu`/`cuda`) |
 | `MAX_HISTORY_TURNS`| `10`              | Conversation turns retained              |
 | `TEMPERATURE`      | `0.7`             | LLM sampling temperature (0.0–2.0)       |
 | `MAX_OUTPUT_TOKENS`| `1024`            | Max tokens per reply                     |
@@ -214,7 +250,7 @@ All optional — read from `.env` (see `.env.example`), with defaults shown:
 python main.py                # run (mic → text fallback)
 python main.py --text         # force text input
 python main.py --fresh        # start with default state (ignore saved)
-python main.py --version      # print "KEERTHI v2.0.0" and exit
+python main.py --version      # print "KEERTHI v2.2.0" and exit
 ```
 
 In-session commands: `exit` / `quit` / `shutdown` (power down), `/reset`
@@ -267,19 +303,20 @@ Example model output: `"Turning things on for you. [ACTION:LIGHT_ON][ACTION:AC_O
 
 ## 9. Testing
 
-Run: `python -m unittest discover -s tests -v` (stdlib, no extra deps). **103 tests, all passing.**
+Run: `python -m unittest discover -s tests -v` (stdlib, no extra deps). **117 tests, all passing.**
+Frontend: `npm test` (vitest + Testing Library, 3 tests), `npm run lint` (tsc), `npm run build`.
 
 | File                  | # Tests | Covers                                                         |
 | --------------------- | ------- | -------------------------------------------------------------- |
-| `test_executive.py`   | ~42     | every intent, clamping, defaults, safety confirmation, timers, weather provider, reset |
+| `test_executive.py`   | 52      | every intent, clamping (incl. `SET_TEMP` 16–30), defaults, safety confirmation, timers + stale-fire pruning, weather provider, reset |
 | `test_persistence.py` | 4       | save/reload, `--fresh`, missing file, corrupt file             |
-| `test_config.py`      | 9       | `validate_config` warnings; `_env_bool`/`_env_int` parsing     |
+| `test_config.py`      | 11      | `validate_config` warnings (incl. retired model); `_env_bool`/`_env_int` parsing |
 | `test_nlp.py`         | 4       | manifest contents, intent key set, safety markers              |
 | `test_brain.py`       | 10      | `_trim_history` + mocked Gemini transport (no live API)        |
 | `test_session.py`     | 11      | `handle_input` / `run`, confirmation callback wiring           |
-| `test_peripherals.py` | 6       | STT engine routing, Vosk transcription parsing                 |
+| `test_peripherals.py` | 10      | STT engine routing (google/vosk/whisper), transcription parsing |
 | `test_weather.py`     | 5       | Open-Meteo geocode/forecast (mocked HTTP)                      |
-| `test_server.py`      | 6       | FastAPI `/api/chat`, `/api/state`, `/api/reset` (TestClient)   |
+| `test_server.py`      | 10      | `/api/chat` + confirmation token flow, `/api/confirm`, `/api/state`, `/api/reset`, `/api/health` |
 
 Brain/Gemini live calls are **not** tested (need a real API key), but the transport is
 fully mocked in `test_brain.py` and `test_server.py`.
@@ -325,19 +362,42 @@ fully mocked in `test_brain.py` and `test_server.py`.
   with chat, confirmation flow, and a live smart-home dashboard.
 - Windows UTF-8 console handling (`chcp 65001`). Tests grown to 103.
 
+**Round 5 — Model migration, correctness & platform hardening (v2.2.0):**
+- **Gemini migration**: default `MODEL_NAME` moved to `gemini-2.5-flash` (1.5 Flash is
+  retired and 404s); `validate_config` now warns on known-retired model names.
+- **Confirmation fix**: the web flow no longer re-runs the LLM on confirm — `/api/chat`
+  returns a single-use `confirmationToken`, and `/api/confirm` executes the stored
+  intents (no duplicate API call, no reply drift).
+- **Robustness**: `SET_TEMP` clamped 16–30; timers that expired while the process was
+  down are pruned on load (no stale fires); timer list + persistence guarded by a
+  reentrant lock against scheduler-thread races.
+- **Web platform**: `/api/health` probe; `/api/ws` WebSocket push for live dashboard
+  state and timer expiries; scheduler thread stopped on server shutdown; single-worker
+  requirement documented; WebSocket support via `uvicorn[standard]`.
+- **Frontend tests**: vitest + Testing Library (chat + confirmation flows); CI now
+  runs the web lint/test/build job (`npm ci`).
+- **faster-whisper STT**: `STT_ENGINE=whisper` offline transcription
+  (`WHISPER_MODEL`/`WHISPER_DEVICE`) alongside Vosk, with Google fallback.
+- Docs updated across README / `project_README` / this document. Python tests: 117;
+  frontend tests: 3.
+
 ---
 
 ## 11. Known Limitations / Future Work
 
 - **Simulated hardware only** — `executive.py` handlers are the IoT integration point.
-- **Google STT needs internet** — offline Vosk supported via `STT_ENGINE=vosk`, but it
-  needs a model download and `pip install -r requirements-stt.txt`.
+- **Offline STT needs a model download** — `STT_ENGINE=vosk` needs a Vosk model
+  (manual download); `STT_ENGINE=whisper` needs `pip install -r requirements-stt.txt`
+  and downloads its model from Hugging Face on first use.
 - **Gemini live calls untested** — transport is mocked in tests; live calls need a key.
-- **Timer expiry is non-persistent at fire-time** — scheduled timers survive restarts in
-  state, but a timer that expires while the process is down fires on next poll.
+  Since June 19, 2026 the Gemini API also rejects *unrestricted* API keys — restrict
+  your key in Google AI Studio.
+- **Web server is stateful in-process** — `keerthi/server.py` keeps brain/officer and
+  the pending-confirmation store as module singletons; run with `--workers 1` or move
+  to a shared store (Redis) for multi-worker deployments.
 - **Weather needs internet** — Open-Meteo is free and keyless but requires connectivity.
-- **Web server is stateful in-process** — `keerthi/server.py` keeps brain/officer as
-  module singletons; multiple workers would need a shared store.
+- **Timer expiry is lost, not fired late** — timers that expire while the process is
+  down are pruned on the next start (within a 60 s grace window) rather than fired late.
 - Windows console may render `°C` / unicode inconsistently depending on codepage
   (mitigated by `chcp 65001` on startup).
 

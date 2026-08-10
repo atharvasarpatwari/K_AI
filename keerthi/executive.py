@@ -13,6 +13,9 @@ from keerthi.nlp import SAFETY_INTENTS as SAFETY_INTENTS
 MAX_FAN_SPEED = 5
 MAX_BRIGHTNESS = 100
 MAX_HEATER_TEMP = 50
+MIN_AC_TEMP = 16
+MAX_AC_TEMP = 30
+TIMER_STALE_GRACE_SECONDS = 60
 SCHEDULER_POLL_SECONDS = 0.5
 
 
@@ -29,6 +32,8 @@ class ExecutiveOfficer:
         if load_state:
             self._load_state()
         self.state.setdefault("timers", [])
+        self._prune_stale_timers()
+        self._lock = threading.RLock()
         self._notifier: Callable[[str], None] | None = None
         self._running = False
         self._thread: threading.Thread | None = None
@@ -125,7 +130,7 @@ class ExecutiveOfficer:
         match = _first_int(args, default=22)
         if match is None:
             return None
-        temp = match
+        temp = _clamp(match, MIN_AC_TEMP, MAX_AC_TEMP)
         self.state["devices"]["bedroom_ac"]["temp"] = temp
         return f"Climate adjusted to {temp}°C"
 
@@ -228,29 +233,32 @@ class ExecutiveOfficer:
         if match is None:
             return "I couldn't read a duration for that timer."
         seconds = _timer_seconds(match, " ".join(args).lower())
-        label = f"Timer {len(self.state['timers']) + 1}"
-        self.state["timers"].append({"label": label, "due": time.time() + seconds})
+        with self._lock:
+            label = f"Timer {len(self.state['timers']) + 1}"
+            self.state["timers"].append({"label": label, "due": time.time() + seconds})
         return f"Timer set for {_format_duration(seconds)}. ({label})"
 
     def _cancel_timer(self, args: list[str]) -> str:
-        timers = self.state["timers"]
         if not args:
             return "Please specify which timer to cancel."
         raw = args[0].strip()
-        if re.fullmatch(r"\d+", raw):
-            index = int(raw)
-            if 0 <= index < len(timers):
-                label = timers.pop(index)["label"]
-                return f"Timer cancelled: {label}"
-            return f"No timer at index {index}."
-        for timer in timers:
-            if timer["label"] == raw:
-                timers.remove(timer)
-                return f"Timer cancelled: {raw}"
+        with self._lock:
+            timers = self.state["timers"]
+            if re.fullmatch(r"\d+", raw):
+                index = int(raw)
+                if 0 <= index < len(timers):
+                    label = timers.pop(index)["label"]
+                    return f"Timer cancelled: {label}"
+                return f"No timer at index {index}."
+            for timer in timers:
+                if timer["label"] == raw:
+                    timers.remove(timer)
+                    return f"Timer cancelled: {raw}"
         return f"No timer named '{raw}'."
 
     def _check_timers(self, args: list[str]) -> str:
-        timers = self.state["timers"]
+        with self._lock:
+            timers = list(self.state["timers"])
         if not timers:
             return "No timers are currently set."
         now = time.time()
@@ -263,8 +271,9 @@ class ExecutiveOfficer:
     def _fire_due_timers(self) -> list[str]:
         """Returns messages for timers that have expired and removes them."""
         now = time.time()
-        fired = [t for t in self.state["timers"] if t["due"] <= now]
-        self.state["timers"] = [t for t in self.state["timers"] if t["due"] > now]
+        with self._lock:
+            fired = [t for t in self.state["timers"] if t["due"] <= now]
+            self.state["timers"] = [t for t in self.state["timers"] if t["due"] > now]
         if fired:
             self._save_state()
         return [f"Timer '{t['label']}' is up!" for t in fired]
@@ -330,12 +339,30 @@ class ExecutiveOfficer:
         except (OSError, ValueError):
             pass
 
+    def _prune_stale_timers(self) -> None:
+        """Drops timers that expired long before this process started.
+
+        A timer that should have fired while the process was down is dropped
+        rather than fired late on the next poll.
+        """
+        now = time.time()
+        keep: list[dict[str, Any]] = []
+        for timer in self.state.get("timers", []):
+            try:
+                due = float(timer.get("due", now))
+            except (TypeError, ValueError):
+                due = now
+            if due + TIMER_STALE_GRACE_SECONDS > now:
+                keep.append(timer)
+        self.state["timers"] = keep
+
     def _save_state(self) -> None:
-        try:
-            with open(self.state_file, "w", encoding="utf-8") as f:
-                json.dump(self.state, f, indent=2)
-        except OSError:
-            pass
+        with self._lock:
+            try:
+                with open(self.state_file, "w", encoding="utf-8") as f:
+                    json.dump(self.state, f, indent=2)
+            except OSError:
+                pass
 
     def get_summary(self) -> dict[str, Any]:
         """Returns a snapshot of current status for the UI/Console."""

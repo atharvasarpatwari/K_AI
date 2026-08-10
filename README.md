@@ -2,7 +2,7 @@
 
 **K**nowledge-**E**nhanced **E**ngine for **R**eal-**T**ime **H**uman **I**ntelligence.
 
-A conversational voice assistant for Windows powered by **Google Gemini 1.5 Flash**.
+A conversational voice assistant for Windows powered by **Google Gemini 2.5 Flash**.
 It pairs an LLM "brain" with an executive layer that parses `[ACTION:...]` tags to
 control a **simulated smart home**, plus console UI, text-to-speech, and optional
 speech-to-text.
@@ -17,11 +17,13 @@ speech-to-text.
 - **Timers** — set, check, and cancel timers; expiry announced via speech.
 - **Weather reports** — current conditions for your location (Open-Meteo, no API key).
 - **State persistence** — smart-home state survives restarts via `keerthi_state.json`.
-- **Microphone input** — Google STT by default, offline Vosk optional (`STT_ENGINE=vosk`).
+- **Microphone input** — Google STT by default; offline Vosk (`STT_ENGINE=vosk`) or
+  faster-whisper (`STT_ENGINE=whisper`) optional.
 - **Text-to-speech** — spoken replies via `pyttsx3`.
 - **Safety confirmation** — destructive actions (unlocking the door, removing tasks) ask before executing.
-- **Web interface** — chat + live smart-home dashboard (FastAPI + React).
-- **CI + static checks** — GitHub Actions runs ruff, mypy, and 103 tests.
+- **Web interface** — chat + live smart-home dashboard (FastAPI + React) with
+  WebSocket push for state changes and timer expiries.
+- **CI + static checks** — GitHub Actions runs ruff, mypy, 117+ tests, and the web lint/test/build.
 
 ## Installation
 
@@ -40,10 +42,14 @@ GEMINI_API_KEY=your_key_here
 
 ```bash
 pip install -r requirements-web.txt
-uvicorn keerthi.server:app --reload        # API on :8000
-npm install                                # frontend (first time only)
-npm run dev                                # app on http://localhost:3000
+uvicorn keerthi.server:app --reload --workers 1   # API on :8000 (single worker)
+npm install                                       # frontend (first time only)
+npm run dev                                       # app on http://localhost:3000
 ```
+
+State and pending confirmations live in-process, so run the API with `--workers 1`.
+`GET /api/health` reports readiness; `GET /api/ws` streams live state and timer
+expiries to the dashboard.
 
 ## Usage
 
@@ -68,8 +74,8 @@ npm run dev                                # app on http://localhost:3000
 ## Configuration (all optional, via `.env`)
 
 `MODEL_NAME`, `TTS_RATE`, `USE_MICROPHONE`, `STT_LANGUAGE`, `STT_ENGINE`,
-`VOSK_MODEL_PATH`, `MAX_HISTORY_TURNS`, `TEMPERATURE`, `MAX_OUTPUT_TOKENS`,
-`TOP_P`, `LOG_LEVEL`, `STATE_FILE`
+`VOSK_MODEL_PATH`, `WHISPER_MODEL`, `WHISPER_DEVICE`, `MAX_HISTORY_TURNS`,
+`TEMPERATURE`, `MAX_OUTPUT_TOKENS`, `TOP_P`, `LOG_LEVEL`, `STATE_FILE`
 
 ## Development
 

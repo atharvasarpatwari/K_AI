@@ -32,6 +32,14 @@ class TestValidateConfig(unittest.TestCase):
         self._set_valid()
         self.assertEqual(self._collect_warnings(), [])
 
+    def test_default_model_is_not_retired(self):
+        self.assertFalse(cfg.CONFIG["MODEL_NAME"].startswith(("gemini-1.5", "gemini-2.0-flash")))
+
+    def test_retired_model_warns(self):
+        self._set_valid()
+        cfg.CONFIG["MODEL_NAME"] = "gemini-1.5-flash"
+        self.assertTrue(self._collect_warnings())
+
     def test_missing_api_key_warns(self):
         self._set_valid()
         cfg.CONFIG["GEMINI_API_KEY"] = None

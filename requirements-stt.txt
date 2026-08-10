@@ -1,3 +1,7 @@
-# Optional: offline speech-to-text (Vosk). Download a model first:
-#   https://alphacephei.com/vosk/models  (e.g. vosk-model-small-en-us-0.15)
+# Optional: offline speech-to-text engines.
+# - Vosk: download a model first: https://alphacephei.com/vosk/models
+#   (e.g. vosk-model-small-en-us-0.15), then set STT_ENGINE=vosk.
+# - faster-whisper: set STT_ENGINE=whisper. Downloads its model from Hugging
+#   Face on first use (see WHISPER_MODEL, e.g. "small.en").
 vosk
+faster-whisper

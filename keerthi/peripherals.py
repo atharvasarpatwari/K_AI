@@ -19,6 +19,7 @@ class PeripheralController:
         self.engine: Any = None
         self.recognizer: Any = None
         self._vosk_model: Any = None
+        self._whisper_model: Any = None
 
         self._init_tts()
         self._init_stt()
@@ -93,8 +94,13 @@ class PeripheralController:
 
     def _transcribe(self, audio: Any) -> str:
         """Transcribes audio with the configured engine, falling back to Google."""
-        if CONFIG["STT_ENGINE"] == "vosk":
+        engine = CONFIG["STT_ENGINE"]
+        if engine == "vosk":
             text = self._transcribe_vosk(audio)
+            if text:
+                return text
+        elif engine == "whisper":
+            text = self._transcribe_whisper(audio)
             if text:
                 return text
         return self._transcribe_google(audio)
@@ -109,7 +115,7 @@ class PeripheralController:
         try:
             import json
 
-            import vosk  # type: ignore
+            import vosk
 
             if self._vosk_model is None:
                 self._vosk_model = vosk.Model(CONFIG["VOSK_MODEL_PATH"])
@@ -119,6 +125,25 @@ class PeripheralController:
                 return ""
             result = json.loads(recognizer.Result())
             return str(result.get("text", "").strip())
+        except Exception:
+            return ""
+
+    def _transcribe_whisper(self, audio: Any) -> str:
+        try:
+            import numpy as np
+            from faster_whisper import WhisperModel
+
+            if self._whisper_model is None:
+                self._whisper_model = WhisperModel(
+                    CONFIG["WHISPER_MODEL"],
+                    device=CONFIG["WHISPER_DEVICE"],
+                    compute_type="auto",
+                )
+            raw = audio.get_raw_data(convert_rate=16000, convert_width=2)
+            samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+            language = CONFIG["STT_LANGUAGE"].split("-")[0]
+            segments, _info = self._whisper_model.transcribe(samples, language=language)
+            return " ".join(segment.text for segment in segments).strip()
         except Exception:
             return ""
 
