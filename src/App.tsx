@@ -372,6 +372,44 @@ function TypingIndicator() {
   )
 }
 
+function Waveform() {
+  const delays = [0, 0.2, 0.4, 0.55, 0.35, 0.15, 0.45]
+  return (
+    <span className="flex h-5 shrink-0 items-center gap-[3px]" aria-hidden="true">
+      {delays.map((delay, i) => (
+        <span
+          key={i}
+          className="wave-bar h-full w-[3px] rounded-full bg-red-400"
+          style={{ animationDelay: `${delay}s`, animationDuration: `${0.85 + (i % 3) * 0.2}s` }}
+        />
+      ))}
+    </span>
+  )
+}
+
+function SidebarSkeleton() {
+  return (
+    <div className="space-y-4" data-testid="sidebar-skeleton">
+      <div className="flex items-center gap-2">
+        <span className="skeleton h-7 w-7" />
+        <span className="skeleton h-4 w-28" />
+      </div>
+      <div className="grid grid-cols-4 gap-2">
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i} className="flex flex-col items-center gap-1.5">
+            <span className="skeleton h-16 w-16 rounded-full" />
+            <span className="skeleton h-3 w-8" />
+          </div>
+        ))}
+      </div>
+      <div className="skeleton h-20 w-full" />
+      <div className="skeleton h-24 w-full" />
+      <div className="skeleton h-28 w-full" />
+      <div className="skeleton h-20 w-full" />
+    </div>
+  )
+}
+
 function ChatBubble({ msg }: { msg: Message }) {
   const isUser = msg.role === 'user'
   const isSystem = msg.role === 'system'
@@ -853,7 +891,7 @@ export default function App() {
               e.preventDefault()
               handleSend()
             }}
-            className="mx-auto flex w-full max-w-3xl items-center gap-2 rounded-2xl border border-slate-700/80 bg-slate-900/60 p-2 shadow-lg shadow-black/20 backdrop-blur"
+            className="mx-auto flex w-full max-w-3xl items-center gap-1.5 rounded-2xl border border-slate-700/80 bg-slate-900/60 p-1.5 shadow-lg shadow-black/20 backdrop-blur sm:gap-2 sm:p-2"
           >
             <Button
               type="button"
@@ -862,11 +900,12 @@ export default function App() {
               disabled={loading}
               aria-label={listening ? 'Recording… tap to stop' : 'Mic'}
               title="Voice input"
-              className="shrink-0 rounded-xl px-3"
+              className="shrink-0 rounded-xl px-2.5 sm:px-3"
             >
               {listening ? <MicOff className="h-4 w-4 text-red-400" /> : <Mic className="h-4 w-4" />}
               <span className="hidden sm:inline">{listening ? 'Recording…' : 'Mic'}</span>
             </Button>
+            {listening && <Waveform />}
             <input
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -901,7 +940,7 @@ export default function App() {
             : 'translate-x-full p-4 lg:w-0 lg:translate-x-0 lg:overflow-hidden lg:p-0'
         }`}
       >
-        {system && (
+        {system ? (
           <>
             <div className="mb-4 flex items-center justify-between">
               <h2 className="flex min-w-0 items-center gap-2 text-sm font-semibold text-slate-300">
@@ -1258,6 +1297,8 @@ export default function App() {
               )}
             </Card>
           </>
+        ) : (
+          <SidebarSkeleton />
         )}
       </aside>
     </div>
