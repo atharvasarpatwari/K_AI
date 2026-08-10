@@ -58,6 +58,7 @@ Operational Rules:
 Context:
 User: {CONFIG['USER_NAME']}
 Location: {CONFIG['LOCATION']}
+Software version: {CONFIG['VERSION']}
 Host: (injected live via state)
 """
 
