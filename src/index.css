@@ -1,1 +1,184 @@
 @import 'tailwindcss';
+
+@plugin '@tailwindcss/typography';
+
+@theme {
+  --font-sans: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
+
+  --animate-fade-up: fade-up 0.35s ease-out both;
+  --animate-fade-in: fade-in 0.25s ease-out both;
+
+  @keyframes fade-up {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background-color: #020617;
+  background-image:
+    radial-gradient(60rem 32rem at 110% -10%, rgb(34 211 238 / 0.07), transparent),
+    radial-gradient(50rem 26rem at -20% 110%, rgb(129 140 248 / 0.06), transparent),
+    radial-gradient(40rem 24rem at 50% 120%, rgb(16 185 129 / 0.04), transparent);
+  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: rgb(34 211 238 / 0.25);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(51 65 85 / 0.8) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgb(51 65 85 / 0.8);
+  border-radius: 8px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(71 85 105 / 0.9);
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-slate-800/70 bg-slate-900/40 backdrop-blur;
+  }
+
+  .btn {
+    @apply inline-flex cursor-pointer select-none items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/70 disabled:pointer-events-none disabled:opacity-50;
+  }
+  .btn:active:not(:disabled) {
+    @apply scale-95;
+  }
+
+  .btn-primary {
+    @apply bg-cyan-600 text-white shadow-lg shadow-cyan-950/50 hover:bg-cyan-500;
+  }
+  .btn-ghost {
+    @apply border border-slate-700/80 bg-transparent text-slate-200 hover:bg-slate-800/80;
+  }
+  .btn-soft {
+    @apply bg-slate-800 text-slate-200 hover:bg-slate-700;
+  }
+  .btn-danger {
+    @apply border border-red-900/50 bg-red-950/60 text-red-200 hover:bg-red-900/70;
+  }
+
+  .input {
+    @apply rounded-xl border border-slate-700 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 outline-none transition-colors placeholder:text-slate-500 focus:border-cyan-500/70 focus:ring-2 focus:ring-cyan-500/20;
+  }
+
+  .chip {
+    @apply cursor-pointer rounded-full border border-slate-700/80 bg-slate-900/60 px-3 py-1.5 text-xs text-slate-300 transition-colors hover:border-cyan-500/50 hover:text-cyan-300;
+  }
+
+  .typing-dot {
+    animation: typing-bounce 1.2s infinite ease-in-out;
+  }
+}
+
+@keyframes typing-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.5;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+.slider {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 9999px;
+  background: linear-gradient(90deg, #22d3ee var(--fill, 0%), rgb(51 65 85) var(--fill, 0%));
+  outline: none;
+  cursor: pointer;
+}
+
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 9999px;
+  background: #fff;
+  border: 3px solid #06b6d4;
+  box-shadow: 0 0 10px rgb(34 211 238 / 0.55);
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.slider::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+.slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 9999px;
+  background: #fff;
+  border: 3px solid #06b6d4;
+  box-shadow: 0 0 10px rgb(34 211 238 / 0.55);
+  cursor: pointer;
+}
+
+.slider::-moz-range-track {
+  height: 6px;
+  border-radius: 9999px;
+  background: rgb(51 65 85);
+}
+
+.slider::-moz-range-progress {
+  height: 6px;
+  border-radius: 9999px;
+  background: #22d3ee;
+}
+
+.prose.prose-invert {
+  --tw-prose-body: theme(colors.slate.300);
+  --tw-prose-headings: theme(colors.slate.100);
+  --tw-prose-links: theme(colors.cyan.400);
+  --tw-prose-bold: theme(colors.slate.100);
+  --tw-prose-code: theme(colors.cyan.300);
+  --tw-prose-pre-code: theme(colors.slate.200);
+  --tw-prose-pre-bg: theme(colors.slate.900);
+  --tw-prose-quotes: theme(colors.slate.300);
+  --tw-prose-th-borders: theme(colors.slate.700);
+  --tw-prose-td-borders: theme(colors.slate.800);
+}
