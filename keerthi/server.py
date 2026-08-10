@@ -1,7 +1,7 @@
 """FastAPI web backend for KEERTHI.
 
 Exposes the brain + executive over HTTP so a browser frontend can chat with
-KEERTHI and inspect the simulated smart-home state.
+KEERTHI and inspect the live system state.
 
 State lives in-process (module singletons), so run a single worker:
 
@@ -13,9 +13,10 @@ import uuid
 from contextlib import suppress
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
+from keerthi import system
 from keerthi.brain import KeerthiBrain
 from keerthi.config import CONFIG
 from keerthi.executive import (
@@ -23,11 +24,13 @@ from keerthi.executive import (
     ExecutiveOfficer,
     extract_intents,
 )
+from keerthi.peripherals import PeripheralController
 
-app = FastAPI(title="KEERTHI API", version="2.2.0")
+app = FastAPI(title="KEERTHI API", version="2.3.0")
 
 _brain: KeerthiBrain | None = None
 _officer: ExecutiveOfficer | None = None
+_controller: PeripheralController | None = None
 _loop: asyncio.AbstractEventLoop | None = None
 
 # Single-use confirmation tokens for pending safety-critical actions.
@@ -50,6 +53,13 @@ def get_officer() -> ExecutiveOfficer:
         _officer = ExecutiveOfficer()
         _officer.set_notifier(_broadcast)
     return _officer
+
+
+def get_controller() -> PeripheralController:
+    global _controller
+    if _controller is None:
+        _controller = PeripheralController()
+    return _controller
 
 
 async def _send_events(events: list[dict[str, Any]]) -> None:
@@ -121,7 +131,7 @@ def health() -> dict[str, Any]:
 
 @app.get("/api/state")
 def get_state() -> dict[str, Any]:
-    """Returns the current smart-home state."""
+    """Returns the current system state (metrics, processes, tasks, timers)."""
     return get_officer().get_summary()
 
 
@@ -197,7 +207,7 @@ def confirm(request: ConfirmRequest) -> ChatResponse:
 
 @app.post("/api/action")
 def run_action(request: ActionRequest) -> ChatResponse:
-    """Executes a smart-home intent directly (no LLM round-trip)."""
+    """Executes a system intent directly (no LLM round-trip)."""
     officer = get_officer()
     tag = f"[ACTION:{request.intent}"
     if request.args:
@@ -230,6 +240,32 @@ def run_action(request: ActionRequest) -> ChatResponse:
         state=officer.get_summary(),
         needsConfirmation=False,
     )
+
+
+@app.get("/api/files")
+def list_files(path: str = ".") -> dict[str, Any]:
+    """Lists a directory for the browser file explorer."""
+    return system.list_directory(path)
+
+
+@app.post("/api/transcribe")
+async def transcribe_audio(request: Request) -> dict[str, str]:
+    """Transcribes raw 16 kHz mono int16 PCM audio bytes to text.
+
+    The browser frontend records mic audio, resamples it to 16 kHz mono
+    PCM, and POSTs the raw bytes here. The configured STT engine
+    (google/vosk/whisper) does the transcription.
+    """
+    import speech_recognition as sr  # type: ignore[import-untyped]
+
+    data = await request.body()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty audio body")
+    audio = sr.AudioData(data, 16000, 2)
+    text = get_controller()._transcribe(audio)
+    if not text:
+        raise HTTPException(status_code=422, detail="Could not transcribe audio")
+    return {"text": text}
 
 
 @app.websocket("/api/ws")

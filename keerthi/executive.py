@@ -7,20 +7,22 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from keerthi import system
 from keerthi.config import CONFIG, INITIAL_STATE
 from keerthi.nlp import SAFETY_INTENTS as SAFETY_INTENTS
 
-MAX_FAN_SPEED = 5
-MAX_BRIGHTNESS = 100
-MAX_HEATER_TEMP = 50
-MIN_AC_TEMP = 16
-MAX_AC_TEMP = 30
+PROCESS_REPORT_LIMIT = 10
 TIMER_STALE_GRACE_SECONDS = 60
 SCHEDULER_POLL_SECONDS = 0.5
 
 
 class ExecutiveOfficer:
-    """Manages the state and execution of smart actions based on the NLP Library."""
+    """Executes system-level actions based on [ACTION:...] tags.
+
+    Live machine access (metrics, processes, apps, commands, files) is
+    delegated to :mod:`keerthi.system`; tasks and timers are the only
+    persistent state KEERTHI tracks itself.
+    """
 
     def __init__(
         self,
@@ -31,6 +33,7 @@ class ExecutiveOfficer:
         self.state_file = Path(state_file or CONFIG["STATE_FILE"])
         if load_state:
             self._load_state()
+        self.state.setdefault("tasks", [])
         self.state.setdefault("timers", [])
         self._prune_stale_timers()
         self._lock = threading.RLock()
@@ -39,29 +42,22 @@ class ExecutiveOfficer:
         self._thread: threading.Thread | None = None
         self._weather_provider: Callable[[str], str] | None = None
         self._handlers: dict[str, Callable[[list[str]], str | None]] = {
-            "LIGHT_ON": self._light_on,
-            "LIGHT_OFF": self._light_off,
-            "SET_BRIGHTNESS": self._set_brightness,
-            "AC_ON": self._ac_on,
-            "AC_OFF": self._ac_off,
-            "SET_TEMP": self._set_temp,
-            "FAN_ON": self._fan_on,
-            "FAN_OFF": self._fan_off,
-            "FAN_SPEED": self._fan_speed,
-            "TV_ON": self._tv_on,
-            "TV_OFF": self._tv_off,
-            "CURTAIN_OPEN": self._curtain_open,
-            "CURTAIN_CLOSE": self._curtain_close,
-            "HEATER_ON": self._heater_on,
-            "HEATER_OFF": self._heater_off,
-            "HEATER_TEMP": self._heater_temp,
+            "SYSTEM_STATUS": self._system_status,
+            "CPU_USAGE": self._cpu_usage,
+            "MEMORY_USAGE": self._memory_usage,
+            "DISK_USAGE": self._disk_usage,
+            "BATTERY_STATUS": self._battery_status,
+            "LIST_PROCESSES": self._list_processes,
+            "KILL_PROCESS": self._kill_process,
+            "OPEN_APP": self._open_app,
+            "RUN_COMMAND": self._run_command,
+            "FILE_LIST": self._file_list,
+            "OPEN_FILE": self._open_file,
             "RESET_STATE": self._reset_state,
             "SET_TIMER": self._set_timer,
             "CANCEL_TIMER": self._cancel_timer,
             "CHECK_TIMERS": self._check_timers,
             "WEATHER_REPORT": self._get_weather,
-            "LOCK_DOOR": self._lock_door,
-            "UNLOCK_DOOR": self._unlock_door,
             "ADD_TASK": self._add_task,
             "REMOVE_TASK": self._remove_task,
             "STATUS_REPORT": self._status_report,
@@ -72,7 +68,7 @@ class ExecutiveOfficer:
         ai_response: str,
         confirm: Callable[[str], bool] | None = None,
     ) -> list[str]:
-        """Extracts [ACTION:...] tags, updates internal state, and persists it.
+        """Extracts [ACTION:...] tags, executes them, and persists state.
 
         When a `confirm` callback is provided, intents in SAFETY_INTENTS are
         only executed if the callback returns True for the intent name.
@@ -96,121 +92,87 @@ class ExecutiveOfficer:
             self._save_state()
         return executed
 
-    # ---- Lighting ----
+    # ---- System status ----
 
-    def _light_on(self, args: list[str]) -> str:
-        self.state["devices"]["living_room_light"]["status"] = "on"
-        return "Living room light: ACTIVE"
+    def _system_status(self, args: list[str]) -> str:
+        m = system.get_metrics()
+        battery = _battery_text(m)
+        return (
+            f"System status — CPU {m['cpu']}% ({m['cores']} cores), "
+            f"memory {m['memoryPercent']}%, disk {m['diskPercent']}% used, "
+            f"{battery}."
+        )
 
-    def _light_off(self, args: list[str]) -> str:
-        self.state["devices"]["living_room_light"]["status"] = "off"
-        return "Living room light: INACTIVE"
+    def _cpu_usage(self, args: list[str]) -> str:
+        m = system.get_metrics()
+        return f"CPU usage is {m['cpu']}% across {m['cores']} cores."
 
-    def _set_brightness(self, args: list[str]) -> str | None:
-        match = _first_int(args)
-        if match is None:
-            return None
-        brightness = _clamp(match, 0, MAX_BRIGHTNESS)
-        light = self.state["devices"]["living_room_light"]
-        light["brightness"] = brightness
-        light["status"] = "on" if brightness > 0 else "off"
-        return f"Light brightness set to {brightness}%"
+    def _memory_usage(self, args: list[str]) -> str:
+        m = system.get_metrics()
+        used = _human_bytes(m["memoryUsed"])
+        total = _human_bytes(m["memoryTotal"])
+        return f"Memory usage is {m['memoryPercent']}% ({used} of {total})."
 
-    # ---- Climate ----
+    def _disk_usage(self, args: list[str]) -> str:
+        m = system.get_metrics()
+        used = _human_bytes(m["diskUsed"])
+        total = _human_bytes(m["diskTotal"])
+        return f"Disk usage is {m['diskPercent']}% ({used} of {total})."
 
-    def _ac_on(self, args: list[str]) -> str:
-        self.state["devices"]["bedroom_ac"]["status"] = "on"
-        return "Bedroom AC: COOLING"
+    def _battery_status(self, args: list[str]) -> str:
+        m = system.get_metrics()
+        return _battery_text(m)
 
-    def _ac_off(self, args: list[str]) -> str:
-        self.state["devices"]["bedroom_ac"]["status"] = "off"
-        return "Bedroom AC: OFF"
+    def _list_processes(self, args: list[str]) -> str:
+        limit = _first_int(args, default=PROCESS_REPORT_LIMIT)
+        if limit is None:
+            limit = PROCESS_REPORT_LIMIT
+        rows = system.list_processes(limit)
+        if not rows:
+            return "No running processes found."
+        parts = [
+            f"PID {row['pid']} {row['name']} (CPU {row['cpu']}%, MEM {row['memory']}%)"
+            for row in rows
+        ]
+        return "Top processes: " + "; ".join(parts) + "."
 
-    def _set_temp(self, args: list[str]) -> str | None:
-        match = _first_int(args, default=22)
-        if match is None:
-            return None
-        temp = _clamp(match, MIN_AC_TEMP, MAX_AC_TEMP)
-        self.state["devices"]["bedroom_ac"]["temp"] = temp
-        return f"Climate adjusted to {temp}°C"
+    def _kill_process(self, args: list[str]) -> str:
+        pid = _first_int(args)
+        if pid is None:
+            return "Please provide a process PID to kill (e.g. KILL_PROCESS:1234)."
+        return system.kill_process(pid)
 
-    def _fan_on(self, args: list[str]) -> str:
-        self.state["devices"]["kitchen_fan"]["status"] = "on"
-        return "Kitchen fan: ON"
+    def _open_app(self, args: list[str]) -> str:
+        return system.open_app(_join_args(args))
 
-    def _fan_off(self, args: list[str]) -> str:
-        self.state["devices"]["kitchen_fan"]["status"] = "off"
-        return "Kitchen fan: OFF"
+    def _run_command(self, args: list[str]) -> str:
+        return system.run_command(_join_args(args))
 
-    def _fan_speed(self, args: list[str]) -> str | None:
-        match = _first_int(args)
-        if match is None:
-            return None
-        speed = _clamp(match, 0, MAX_FAN_SPEED)
-        fan = self.state["devices"]["kitchen_fan"]
-        fan["speed"] = speed
-        fan["status"] = "on" if speed > 0 else "off"
-        return f"Kitchen fan speed set to {speed}"
+    def _file_list(self, args: list[str]) -> str:
+        path = _join_args(args) or "."
+        listing = system.list_directory(path)
+        if "error" in listing:
+            return f"Could not list '{path}': {listing['error']}"
+        entries = listing["entries"]
+        if not entries:
+            return f"The folder '{listing['path']}' is empty."
+        names = ", ".join(
+            (f"[DIR] {e['name']}" if e["isDir"] else e["name"]) for e in entries
+        )
+        return f"Contents of {listing['path']}: {names}."
 
-    # ---- Entertainment ----
-
-    def _tv_on(self, args: list[str]) -> str:
-        self.state["devices"]["living_room_tv"]["status"] = "on"
-        return "Living room TV: ON"
-
-    def _tv_off(self, args: list[str]) -> str:
-        self.state["devices"]["living_room_tv"]["status"] = "off"
-        return "Living room TV: OFF"
-
-    # ---- Curtains ----
-
-    def _curtain_open(self, args: list[str]) -> str:
-        self.state["devices"]["bedroom_curtains"]["status"] = "open"
-        return "Bedroom curtains: OPEN"
-
-    def _curtain_close(self, args: list[str]) -> str:
-        self.state["devices"]["bedroom_curtains"]["status"] = "closed"
-        return "Bedroom curtains: CLOSED"
-
-    # ---- Water heater ----
-
-    def _heater_on(self, args: list[str]) -> str:
-        self.state["devices"]["bathroom_heater"]["status"] = "on"
-        return "Bathroom heater: ON"
-
-    def _heater_off(self, args: list[str]) -> str:
-        self.state["devices"]["bathroom_heater"]["status"] = "off"
-        return "Bathroom heater: OFF"
-
-    def _heater_temp(self, args: list[str]) -> str | None:
-        match = _first_int(args, default=40)
-        if match is None:
-            return None
-        temp = _clamp(match, 0, MAX_HEATER_TEMP)
-        heater = self.state["devices"]["bathroom_heater"]
-        heater["temp"] = temp
-        heater["status"] = "on" if temp > 0 else "off"
-        return f"Bathroom heater temperature set to {temp}°C"
-
-    # ---- Security ----
-
-    def _lock_door(self, args: list[str]) -> str:
-        self.state["devices"]["main_door"]["status"] = "locked"
-        return "Main entrance: SECURED"
-
-    def _unlock_door(self, args: list[str]) -> str:
-        self.state["devices"]["main_door"]["status"] = "unlocked"
-        return "Main entrance: UNLOCKED"
+    def _open_file(self, args: list[str]) -> str:
+        return system.open_file(_join_args(args))
 
     # ---- Tasks ----
 
     def _add_task(self, args: list[str]) -> str:
-        task_name = args[0].strip() if args else "New Task"
+        task_name = _join_args(args).strip() or "New Task"
         self.state["tasks"].append(task_name)
         return f"Task synchronization successful: {task_name}"
 
     def _remove_task(self, args: list[str]) -> str:
-        target = args[0].strip() if args else ""
+        target = _join_args(args).strip()
         if not target:
             return "No task name given to remove."
         if target in self.state["tasks"]:
@@ -222,7 +184,7 @@ class ExecutiveOfficer:
 
     def _reset_state(self, args: list[str]) -> str:
         self.state = copy.deepcopy(INITIAL_STATE)
-        return "Smart home state reset to defaults."
+        return "Tasks and timers reset to defaults."
 
     # ---- Timers ----
 
@@ -232,7 +194,7 @@ class ExecutiveOfficer:
         match = _first_int(args)
         if match is None:
             return "I couldn't read a duration for that timer."
-        seconds = _timer_seconds(match, " ".join(args).lower())
+        seconds = _timer_seconds(match, _join_args(args).lower())
         with self._lock:
             label = f"Timer {len(self.state['timers']) + 1}"
             self.state["timers"].append({"label": label, "due": time.time() + seconds})
@@ -241,7 +203,7 @@ class ExecutiveOfficer:
     def _cancel_timer(self, args: list[str]) -> str:
         if not args:
             return "Please specify which timer to cancel."
-        raw = args[0].strip()
+        raw = _join_args(args).strip()
         with self._lock:
             timers = self.state["timers"]
             if re.fullmatch(r"\d+", raw):
@@ -300,19 +262,14 @@ class ExecutiveOfficer:
                     self._notifier(message)
 
     # ---- Reporting ----
+
     def _status_report(self, args: list[str]) -> str:
-        device_parts = []
-        for name, device in self.state["devices"].items():
-            detail = device.get("status", "unknown")
-            if device.get("brightness") is not None:
-                detail += f" at {device['brightness']}% brightness"
-            if device.get("temp") is not None:
-                detail += f", {device['temp']}°C"
-            if device.get("speed") is not None:
-                detail += f", speed {device['speed']}"
-            device_parts.append(f"{name}: {detail}")
+        m = system.get_metrics()
         task_summary = ", ".join(self.state["tasks"]) or "none"
-        return "Status report. " + "; ".join(device_parts) + f". Tasks: {task_summary}."
+        return (
+            f"Status report. CPU {m['cpu']}%, memory {m['memoryPercent']}%, "
+            f"disk {m['diskPercent']}%. Tasks: {task_summary}."
+        )
 
     def _get_weather(self, args: list[str]) -> str:
         return self._resolve_weather_provider()(CONFIG["LOCATION"])
@@ -335,7 +292,8 @@ class ExecutiveOfficer:
             if self.state_file.exists():
                 with open(self.state_file, encoding="utf-8") as f:
                     loaded = json.load(f)
-                self.state = copy.deepcopy(loaded)
+                self.state["tasks"] = list(loaded.get("tasks", self.state["tasks"]))
+                self.state["timers"] = list(loaded.get("timers", self.state["timers"]))
         except (OSError, ValueError):
             pass
 
@@ -365,8 +323,13 @@ class ExecutiveOfficer:
                 pass
 
     def get_summary(self) -> dict[str, Any]:
-        """Returns a snapshot of current status for the UI/Console."""
-        return self.state
+        """Returns live system metrics plus persistent tasks and timers."""
+        return {
+            "system": system.get_metrics(),
+            "processes": system.list_processes(8),
+            "tasks": list(self.state["tasks"]),
+            "timers": list(self.state["timers"]),
+        }
 
 
 def extract_intents(ai_response: str) -> list[str]:
@@ -382,17 +345,18 @@ def _first_int(args: list[str], default: int | None = None) -> int | None:
     return int(match.group()) if match is not None else None
 
 
-def _clamp(value: int, low: int, high: int) -> int:
-    return max(low, min(high, value))
+def _join_args(args: list[str]) -> str:
+    """Rejoins colon-split args (paths like C:\\Users survive [ACTION:...])."""
+    return ":".join(args)
 
 
 def _timer_seconds(value: int, raw: str) -> int:
     """Converts a timer value + free-text units into a clamped number of seconds."""
     if "hour" in raw or "hr" in raw:
-        return _clamp(value, 1, 24) * 3600
+        return max(1, min(value, 24)) * 3600
     if "min" in raw:
-        return _clamp(value, 1, 1440) * 60
-    return _clamp(value, 1, 86400)
+        return max(1, min(value, 1440)) * 60
+    return max(1, min(value, 86400))
 
 
 def _format_duration(seconds: int) -> str:
@@ -406,3 +370,21 @@ def _format_duration(seconds: int) -> str:
     if sec:
         parts.append(f"{sec}s")
     return " ".join(parts) or "0s"
+
+
+def _battery_text(m: dict[str, Any]) -> str:
+    if m.get("batteryPercent") is None:
+        return "no battery detected"
+    state = "charging" if m.get("batteryCharging") else "on battery"
+    return f"battery at {m['batteryPercent']}% ({state})"
+
+
+def _human_bytes(value: int) -> str:
+    size = float(value)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            if unit == "B":
+                return f"{int(size)} {unit}"
+            return f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{value} B"

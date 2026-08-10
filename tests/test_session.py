@@ -63,20 +63,20 @@ class TestConversationSession(unittest.TestCase):
 
     def test_confirm_action_accepts_yes(self):
         self.peripherals.listen.return_value = "yes"
-        self.assertTrue(self.session._confirm_action("UNLOCK_DOOR"))
+        self.assertTrue(self.session._confirm_action("KILL_PROCESS"))
 
     def test_confirm_action_accepts_yeah(self):
         self.peripherals.listen.return_value = "yeah"
-        self.assertTrue(self.session._confirm_action("UNLOCK_DOOR"))
+        self.assertTrue(self.session._confirm_action("KILL_PROCESS"))
 
     def test_confirm_action_rejects_no(self):
         self.peripherals.listen.return_value = "no"
-        self.assertFalse(self.session._confirm_action("UNLOCK_DOOR"))
+        self.assertFalse(self.session._confirm_action("KILL_PROCESS"))
 
     def test_handle_input_passes_confirm_callback(self):
-        self.brain.generate_response.return_value = "Unlocking. [ACTION:UNLOCK_DOOR]"
+        self.brain.generate_response.return_value = "Killing process. [ACTION:KILL_PROCESS:1234]"
         self.officer.parse_and_execute.return_value = []
-        self.session.handle_input("unlock the door")
+        self.session.handle_input("kill the process")
         self.officer.parse_and_execute.assert_called_once()
         call_kwargs = self.officer.parse_and_execute.call_args.kwargs
         self.assertIn("confirm", call_kwargs)

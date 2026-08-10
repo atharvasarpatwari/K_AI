@@ -17,28 +17,21 @@ class TestNlpManifest(unittest.TestCase):
         self.assertEqual(
             set(COMMAND_INTENTS),
             {
-                "LIGHT_ON",
-                "LIGHT_OFF",
-                "SET_BRIGHTNESS",
-                "AC_ON",
-                "AC_OFF",
-                "SET_TEMP",
-                "FAN_ON",
-                "FAN_OFF",
-                "FAN_SPEED",
-                "TV_ON",
-                "TV_OFF",
-                "CURTAIN_OPEN",
-                "CURTAIN_CLOSE",
-                "HEATER_ON",
-                "HEATER_OFF",
-                "HEATER_TEMP",
+                "SYSTEM_STATUS",
+                "CPU_USAGE",
+                "MEMORY_USAGE",
+                "DISK_USAGE",
+                "BATTERY_STATUS",
+                "LIST_PROCESSES",
+                "KILL_PROCESS",
+                "OPEN_APP",
+                "RUN_COMMAND",
+                "FILE_LIST",
+                "OPEN_FILE",
                 "RESET_STATE",
                 "SET_TIMER",
                 "CANCEL_TIMER",
                 "CHECK_TIMERS",
-                "LOCK_DOOR",
-                "UNLOCK_DOOR",
                 "ADD_TASK",
                 "REMOVE_TASK",
                 "STATUS_REPORT",
@@ -48,7 +41,8 @@ class TestNlpManifest(unittest.TestCase):
 
     def test_manifest_marks_safety_intents(self):
         manifest = get_nlp_manifest()
-        self.assertIn("[ACTION:UNLOCK_DOOR] [SAFETY]", manifest)
+        self.assertIn("[ACTION:KILL_PROCESS] [SAFETY]", manifest)
+        self.assertIn("[ACTION:RUN_COMMAND] [SAFETY]", manifest)
         self.assertIn("[ACTION:REMOVE_TASK] [SAFETY]", manifest)
         self.assertIn("confirm", manifest)
 

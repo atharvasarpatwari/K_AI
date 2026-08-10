@@ -40,6 +40,11 @@ class TestValidateConfig(unittest.TestCase):
         cfg.CONFIG["MODEL_NAME"] = "gemini-1.5-flash"
         self.assertTrue(self._collect_warnings())
 
+    def test_legacy_flash_model_warns(self):
+        self._set_valid()
+        cfg.CONFIG["MODEL_NAME"] = "gemini-2.5-flash"
+        self.assertTrue(self._collect_warnings())
+
     def test_missing_api_key_warns(self):
         self._set_valid()
         cfg.CONFIG["GEMINI_API_KEY"] = None

@@ -2,9 +2,10 @@
 
 **K**nowledge-**E**nhanced **E**ngine for **R**eal-**T**ime **H**uman **I**ntelligence.
 
-A conversational voice assistant for Windows powered by **Google Gemini 2.5 Flash**.
+A conversational voice assistant for Windows powered by **Google Gemini 3.5 Flash**.
 It pairs an LLM "brain" with an executive layer that parses `[ACTION:...]` tags to
-control a **simulated smart home**, plus console UI, text-to-speech, and optional
+operate **the computer it runs on** — live system metrics, process control, app
+launching, commands, and file browsing — plus console UI, text-to-speech, and optional
 speech-to-text.
 
 > Full architecture, configuration reference, and history live in
@@ -13,17 +14,19 @@ speech-to-text.
 ## Features
 
 - **Gemini-powered conversation** — calm, witty, proactive persona.
-- **Smart home simulation** — lights, AC, kitchen fan, TV, curtains, water heater, door security, tasks.
+- **Full machine access** — live CPU/memory/disk/battery metrics, top-CPU process
+  listing, process termination, known-app launcher, command runner, and file browsing.
 - **Timers** — set, check, and cancel timers; expiry announced via speech.
 - **Weather reports** — current conditions for your location (Open-Meteo, no API key).
-- **State persistence** — smart-home state survives restarts via `keerthi_state.json`.
+- **State persistence** — task/timer state survives restarts via `keerthi_state.json`.
 - **Microphone input** — Google STT by default; offline Vosk (`STT_ENGINE=vosk`) or
   faster-whisper (`STT_ENGINE=whisper`) optional.
 - **Text-to-speech** — spoken replies via `pyttsx3`.
-- **Safety confirmation** — destructive actions (unlocking the door, removing tasks) ask before executing.
-- **Web interface** — chat + live smart-home dashboard (FastAPI + React) with
+- **Safety confirmation** — destructive actions (killing processes, running commands,
+  removing tasks) ask before executing.
+- **Web interface** — chat + live system dashboard (FastAPI + React) with
   WebSocket push for state changes and timer expiries.
-- **CI + static checks** — GitHub Actions runs ruff, mypy, 117+ tests, and the web lint/test/build.
+- **CI + static checks** — GitHub Actions runs ruff, mypy, 131+ tests, and the web lint/test/build.
 
 ## Installation
 
@@ -57,18 +60,17 @@ expiries to the dashboard.
 | ---------------------------- | ------------------------------------------------- |
 | `python main.py`             | Run with microphone input (falls back to typing)  |
 | `python main.py --text`      | Force text-input mode                             |
-| `python main.py --fresh`     | Ignore saved smart-home state, start fresh        |
+| `python main.py --fresh`     | Ignore saved task/timer state, start fresh      |
 | `python main.py --version`   | Print version and exit                            |
 | `exit` / `quit` / `shutdown` | Power down                                        |
 | `/reset`                     | Clear conversation history                        |
 | `"keerthi"` (wake word)      | Acknowledgment                                    |
 
-## Supported Smart-Home Actions
+## Supported System Actions
 
-`LIGHT_ON`, `LIGHT_OFF`, `SET_BRIGHTNESS`, `AC_ON`, `AC_OFF`, `SET_TEMP`,
-`FAN_ON`, `FAN_OFF`, `FAN_SPEED`, `TV_ON`, `TV_OFF`, `CURTAIN_OPEN`,
-`CURTAIN_CLOSE`, `HEATER_ON`, `HEATER_OFF`, `HEATER_TEMP`, `LOCK_DOOR`,
-`UNLOCK_DOOR`, `ADD_TASK`, `REMOVE_TASK`, `STATUS_REPORT`, `WEATHER_REPORT`,
+`SYSTEM_STATUS`, `CPU_USAGE`, `MEMORY_USAGE`, `DISK_USAGE`, `BATTERY_STATUS`,
+`LIST_PROCESSES`, `KILL_PROCESS`, `OPEN_APP`, `RUN_COMMAND`, `FILE_LIST`,
+`OPEN_FILE`, `ADD_TASK`, `REMOVE_TASK`, `STATUS_REPORT`, `WEATHER_REPORT`,
 `SET_TIMER`, `CANCEL_TIMER`, `CHECK_TIMERS`, `RESET_STATE`
 
 ## Configuration (all optional, via `.env`)
@@ -102,16 +104,18 @@ npm run build
 │   ├── executive.py       ExecutiveOfficer — actions, timers, persistence
 │   ├── peripherals.py     PeripheralController — TTS / STT / console
 │   ├── nlp.py             intents + manifest builder
+│   ├── system.py          real system control (psutil)
 │   ├── server.py          FastAPI web backend
 │   └── services/weather.py  Open-Meteo weather lookup
-├── src/                   React frontend (chat + dashboard)
-└── tests/                 103 unit tests (stdlib unittest)
+├── src/                   React frontend (chat + system dashboard)
+└── tests/                 131 unit tests (stdlib unittest)
 ```
 
 ## Customization
 
 - **Persona**: edit the system prompt in `keerthi/brain.py`.
-- **Smart home**: extend `keerthi/executive.py` handlers; add intents in `keerthi/nlp.py`.
+- **System control**: extend `keerthi/executive.py` handlers + `keerthi/system.py`;
+  add intents in `keerthi/nlp.py`.
 - **Hardware**: update `keerthi/peripherals.py` for your microphone/speaker setup.
 
 ---

@@ -39,7 +39,7 @@ def boot_sequence() -> None:
     time.sleep(0.5)
     console.print("Neural layers loaded. [OK]")
     time.sleep(0.3)
-    console.print("Smart home bridge connected. [OK]")
+    console.print("System monitoring engaged. [OK]")
     time.sleep(0.3)
     console.print("Voice synthesis modules ready. [OK]")
     console.rule(style="cyan")
@@ -55,7 +55,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--fresh",
         action="store_true",
-        help="Ignore saved smart-home state and start from defaults.",
+        help="Ignore saved tasks/timers and start from defaults.",
     )
     parser.add_argument(
         "--version",

@@ -2,9 +2,32 @@ import os
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 from keerthi.config import CONFIG
 from keerthi.executive import ExecutiveOfficer
+
+METRICS = {
+    "cpu": 42,
+    "cores": 8,
+    "memoryUsed": 8 * 1024**3,
+    "memoryTotal": 16 * 1024**3,
+    "memoryPercent": 50,
+    "diskUsed": 100 * 1024**3,
+    "diskTotal": 200 * 1024**3,
+    "diskPercent": 50,
+    "batteryPercent": 80,
+    "batteryCharging": True,
+    "uptime": 300,
+    "platform": "Windows",
+    "hostname": "test",
+    "python": "3.13",
+}
+
+PROCESSES = [
+    {"pid": 1234, "name": "chrome", "cpu": 90, "memory": 20.0},
+    {"pid": 5678, "name": "python", "cpu": 5, "memory": 1.5},
+]
 
 
 class TestExecutiveOfficer(unittest.TestCase):
@@ -18,132 +41,169 @@ class TestExecutiveOfficer(unittest.TestCase):
     def _make_officer(self, name="state.json"):
         return ExecutiveOfficer(state_file=os.path.join(self.tmp.name, name))
 
-    def test_light_on(self):
-        executed = self.officer.parse_and_execute("[ACTION:LIGHT_ON]")
-        self.assertIn("Living room light: ACTIVE", executed)
-        self.assertEqual(self.officer.state["devices"]["living_room_light"]["status"], "on")
+    # ---- System status ----
 
-    def test_light_off(self):
-        self.officer.parse_and_execute("[ACTION:LIGHT_ON]")
-        self.officer.parse_and_execute("[ACTION:LIGHT_OFF]")
-        self.assertEqual(self.officer.state["devices"]["living_room_light"]["status"], "off")
+    @mock.patch("keerthi.system.get_metrics", return_value=METRICS)
+    def test_system_status(self, _metrics):
+        executed = self.officer.parse_and_execute("[ACTION:SYSTEM_STATUS]")
+        self.assertIn("CPU 42%", executed[0])
+        self.assertIn("memory 50%", executed[0])
+        self.assertIn("disk 50%", executed[0])
+        self.assertIn("battery at 80% (charging)", executed[0])
 
-    def test_set_brightness(self):
-        executed = self.officer.parse_and_execute("[ACTION:SET_BRIGHTNESS:70]")
-        self.assertIn("Light brightness set to 70%", executed)
-        light = self.officer.state["devices"]["living_room_light"]
-        self.assertEqual(light["brightness"], 70)
-        self.assertEqual(light["status"], "on")
+    @mock.patch("keerthi.system.get_metrics", return_value=METRICS)
+    def test_cpu_usage(self, _metrics):
+        executed = self.officer.parse_and_execute("[ACTION:CPU_USAGE]")
+        self.assertIn("CPU usage is 42%", executed[0])
 
-    def test_set_brightness_clamped_to_100(self):
-        self.officer.parse_and_execute("[ACTION:SET_BRIGHTNESS:150]")
-        self.assertEqual(self.officer.state["devices"]["living_room_light"]["brightness"], 100)
+    @mock.patch("keerthi.system.get_metrics", return_value=METRICS)
+    def test_memory_usage(self, _metrics):
+        executed = self.officer.parse_and_execute("[ACTION:MEMORY_USAGE]")
+        self.assertIn("Memory usage is 50%", executed[0])
 
-    def test_set_brightness_zero_turns_light_off(self):
-        self.officer.parse_and_execute("[ACTION:SET_BRIGHTNESS:0]")
-        self.assertEqual(self.officer.state["devices"]["living_room_light"]["status"], "off")
+    @mock.patch("keerthi.system.get_metrics", return_value=METRICS)
+    def test_disk_usage(self, _metrics):
+        executed = self.officer.parse_and_execute("[ACTION:DISK_USAGE]")
+        self.assertIn("Disk usage is 50%", executed[0])
 
-    def test_ac_on_off(self):
-        self.officer.parse_and_execute("[ACTION:AC_ON]")
-        self.assertEqual(self.officer.state["devices"]["bedroom_ac"]["status"], "on")
-        self.officer.parse_and_execute("[ACTION:AC_OFF]")
-        self.assertEqual(self.officer.state["devices"]["bedroom_ac"]["status"], "off")
+    @mock.patch("keerthi.system.get_metrics", return_value=METRICS)
+    def test_battery_status(self, _metrics):
+        executed = self.officer.parse_and_execute("[ACTION:BATTERY_STATUS]")
+        self.assertIn("battery at 80% (charging)", executed[0])
 
-    def test_set_temp_plain_number(self):
-        executed = self.officer.parse_and_execute("[ACTION:SET_TEMP:24]")
-        self.assertIn("Climate adjusted to 24°C", executed)
-        self.assertEqual(self.officer.state["devices"]["bedroom_ac"]["temp"], 24)
+    @mock.patch(
+        "keerthi.system.get_metrics",
+        return_value={**METRICS, "batteryPercent": None, "batteryCharging": None},
+    )
+    def test_battery_status_absent(self, _metrics):
+        executed = self.officer.parse_and_execute("[ACTION:BATTERY_STATUS]")
+        self.assertIn("no battery detected", executed[0])
 
-    def test_set_temp_with_words(self):
-        executed = self.officer.parse_and_execute("[ACTION:SET_TEMP:set to 21 degrees]")
-        self.assertIn("Climate adjusted to 21°C", executed)
-        self.assertEqual(self.officer.state["devices"]["bedroom_ac"]["temp"], 21)
+    # ---- Processes ----
 
-    def test_set_temp_defaults_to_22_without_args(self):
-        executed = self.officer.parse_and_execute("[ACTION:SET_TEMP]")
-        self.assertIn("Climate adjusted to 22°C", executed)
-        self.assertEqual(self.officer.state["devices"]["bedroom_ac"]["temp"], 22)
+    @mock.patch("keerthi.system.list_processes", return_value=PROCESSES)
+    def test_list_processes(self, _procs):
+        executed = self.officer.parse_and_execute("[ACTION:LIST_PROCESSES:2]")
+        self.assertIn("PID 1234 chrome", executed[0])
+        self.assertIn("PID 5678 python", executed[0])
 
-    def test_set_temp_non_numeric_arg_is_ignored(self):
-        executed = self.officer.parse_and_execute("[ACTION:SET_TEMP:degrees]")
+    @mock.patch("keerthi.system.list_processes", return_value=[])
+    def test_list_processes_empty(self, _procs):
+        executed = self.officer.parse_and_execute("[ACTION:LIST_PROCESSES]")
+        self.assertIn("No running processes", executed[0])
+
+    @mock.patch("keerthi.system.kill_process", return_value="Terminated chrome (PID 1234).")
+    def test_kill_process(self, kill_mock):
+        executed = self.officer.parse_and_execute("[ACTION:KILL_PROCESS:1234]")
+        self.assertEqual(executed, ["Terminated chrome (PID 1234)."])
+        kill_mock.assert_called_once_with(1234)
+
+    @mock.patch("keerthi.system.kill_process")
+    def test_kill_process_missing_pid(self, kill_mock):
+        executed = self.officer.parse_and_execute("[ACTION:KILL_PROCESS]")
+        self.assertIn("provide a process PID", executed[0])
+        kill_mock.assert_not_called()
+
+    @mock.patch("keerthi.system.kill_process", return_value="Terminated chrome (PID 1234).")
+    def test_kill_process_declined_by_confirm(self, kill_mock):
+        executed = self.officer.parse_and_execute(
+            "[ACTION:KILL_PROCESS:1234]", confirm=lambda _: False
+        )
         self.assertEqual(executed, [])
-        self.assertEqual(self.officer.state["devices"]["bedroom_ac"]["temp"], 22)
+        kill_mock.assert_not_called()
 
-    def test_set_temp_clamped_to_min(self):
-        self.officer.parse_and_execute("[ACTION:SET_TEMP:5]")
-        self.assertEqual(self.officer.state["devices"]["bedroom_ac"]["temp"], 16)
+    @mock.patch("keerthi.system.kill_process", return_value="Terminated chrome (PID 1234).")
+    def test_kill_process_accepted_by_confirm(self, kill_mock):
+        executed = self.officer.parse_and_execute(
+            "[ACTION:KILL_PROCESS:1234]", confirm=lambda _: True
+        )
+        self.assertEqual(executed, ["Terminated chrome (PID 1234)."])
+        kill_mock.assert_called_once_with(1234)
 
-    def test_set_temp_clamped_to_max(self):
-        self.officer.parse_and_execute("[ACTION:SET_TEMP:99]")
-        self.assertEqual(self.officer.state["devices"]["bedroom_ac"]["temp"], 30)
+    # ---- Apps / commands / files ----
 
-    def test_fan_on_off(self):
-        self.officer.parse_and_execute("[ACTION:FAN_ON]")
-        self.assertEqual(self.officer.state["devices"]["kitchen_fan"]["status"], "on")
-        self.officer.parse_and_execute("[ACTION:FAN_OFF]")
-        self.assertEqual(self.officer.state["devices"]["kitchen_fan"]["status"], "off")
+    @mock.patch("keerthi.system.open_app", return_value="Opened notepad.")
+    def test_open_app(self, open_mock):
+        executed = self.officer.parse_and_execute("[ACTION:OPEN_APP:notepad]")
+        self.assertEqual(executed, ["Opened notepad."])
+        open_mock.assert_called_once_with("notepad")
 
-    def test_fan_speed(self):
-        executed = self.officer.parse_and_execute("[ACTION:FAN_SPEED:3]")
-        self.assertIn("Kitchen fan speed set to 3", executed)
-        fan = self.officer.state["devices"]["kitchen_fan"]
-        self.assertEqual(fan["speed"], 3)
-        self.assertEqual(fan["status"], "on")
+    @mock.patch("keerthi.system.run_command", return_value="hello world")
+    def test_run_command(self, run_mock):
+        executed = self.officer.parse_and_execute("[ACTION:RUN_COMMAND:echo hello]")
+        self.assertEqual(executed, ["hello world"])
+        run_mock.assert_called_once_with("echo hello")
 
-    def test_fan_speed_clamped_to_5(self):
-        self.officer.parse_and_execute("[ACTION:FAN_SPEED:9]")
-        self.assertEqual(self.officer.state["devices"]["kitchen_fan"]["speed"], 5)
-
-    def test_fan_speed_zero_turns_fan_off(self):
-        self.officer.parse_and_execute("[ACTION:FAN_SPEED:0]")
-        self.assertEqual(self.officer.state["devices"]["kitchen_fan"]["status"], "off")
-
-    def test_fan_speed_non_numeric_is_ignored(self):
-        executed = self.officer.parse_and_execute("[ACTION:FAN_SPEED:fast]")
+    @mock.patch("keerthi.system.run_command", return_value="hello world")
+    def test_run_command_declined_by_confirm(self, run_mock):
+        executed = self.officer.parse_and_execute(
+            "[ACTION:RUN_COMMAND:echo hello]", confirm=lambda _: False
+        )
         self.assertEqual(executed, [])
+        run_mock.assert_not_called()
 
-    def test_tv_on_off(self):
-        self.officer.parse_and_execute("[ACTION:TV_ON]")
-        self.assertEqual(self.officer.state["devices"]["living_room_tv"]["status"], "on")
-        self.officer.parse_and_execute("[ACTION:TV_OFF]")
-        self.assertEqual(self.officer.state["devices"]["living_room_tv"]["status"], "off")
+    @mock.patch("keerthi.system.list_directory")
+    def test_file_list(self, list_mock):
+        list_mock.return_value = {
+            "path": "C:\\Users",
+            "entries": [
+                {"name": "Documents", "isDir": True},
+                {"name": "readme.txt", "isDir": False},
+            ],
+        }
+        executed = self.officer.parse_and_execute("[ACTION:FILE_LIST:C:\\Users]")
+        self.assertIn("[DIR] Documents", executed[0])
+        self.assertIn("readme.txt", executed[0])
 
-    def test_curtain_open_close(self):
-        self.officer.parse_and_execute("[ACTION:CURTAIN_OPEN]")
-        self.assertEqual(self.officer.state["devices"]["bedroom_curtains"]["status"], "open")
-        self.officer.parse_and_execute("[ACTION:CURTAIN_CLOSE]")
-        self.assertEqual(self.officer.state["devices"]["bedroom_curtains"]["status"], "closed")
+    @mock.patch("keerthi.system.list_directory")
+    def test_file_list_error(self, list_mock):
+        list_mock.return_value = {"path": "Z:\\missing", "entries": [], "error": "no such dir"}
+        executed = self.officer.parse_and_execute("[ACTION:FILE_LIST:Z:\\missing]")
+        self.assertIn("Could not list", executed[0])
 
-    def test_heater_on_off(self):
-        self.officer.parse_and_execute("[ACTION:HEATER_ON]")
-        self.assertEqual(self.officer.state["devices"]["bathroom_heater"]["status"], "on")
-        self.officer.parse_and_execute("[ACTION:HEATER_OFF]")
-        self.assertEqual(self.officer.state["devices"]["bathroom_heater"]["status"], "off")
+    @mock.patch("keerthi.system.open_file", return_value="Opened C:\\readme.txt.")
+    def test_open_file_path_with_colon(self, open_mock):
+        executed = self.officer.parse_and_execute("[ACTION:OPEN_FILE:C:\\readme.txt]")
+        self.assertEqual(executed, ["Opened C:\\readme.txt."])
+        open_mock.assert_called_once_with("C:\\readme.txt")
 
-    def test_heater_temp(self):
-        executed = self.officer.parse_and_execute("[ACTION:HEATER_TEMP:45]")
-        self.assertIn("Bathroom heater temperature set to 45°C", executed)
-        heater = self.officer.state["devices"]["bathroom_heater"]
-        self.assertEqual(heater["temp"], 45)
-        self.assertEqual(heater["status"], "on")
+    # ---- Tasks ----
 
-    def test_heater_temp_clamped_to_50(self):
-        self.officer.parse_and_execute("[ACTION:HEATER_TEMP:99]")
-        self.assertEqual(self.officer.state["devices"]["bathroom_heater"]["temp"], 50)
+    def test_add_task(self):
+        executed = self.officer.parse_and_execute("[ACTION:ADD_TASK: Buy milk]")
+        self.assertIn("Task synchronization successful: Buy milk", executed)
+        self.assertIn("Buy milk", self.officer.state["tasks"])
 
-    def test_heater_temp_zero_turns_heater_off(self):
-        self.officer.parse_and_execute("[ACTION:HEATER_TEMP:0]")
-        heater = self.officer.state["devices"]["bathroom_heater"]
-        self.assertEqual(heater["temp"], 0)
-        self.assertEqual(heater["status"], "off")
+    def test_add_task_default_name(self):
+        self.officer.parse_and_execute("[ACTION:ADD_TASK]")
+        self.assertIn("New Task", self.officer.state["tasks"])
+
+    def test_remove_task(self):
+        executed = self.officer.parse_and_execute("[ACTION:REMOVE_TASK:Call the dentist]")
+        self.assertIn("Task removed: Call the dentist", executed)
+        self.assertNotIn("Call the dentist", self.officer.state["tasks"])
+
+    def test_remove_task_declined_by_confirm(self):
+        executed = self.officer.parse_and_execute(
+            "[ACTION:REMOVE_TASK:Call the dentist]", confirm=lambda _: False
+        )
+        self.assertEqual(executed, [])
+        self.assertIn("Call the dentist", self.officer.state["tasks"])
+
+    def test_remove_task_missing_returns_message(self):
+        executed = self.officer.parse_and_execute("[ACTION:REMOVE_TASK:Nonexistent task]")
+        self.assertIn("No task found named 'Nonexistent task'.", executed)
+
+    # ---- Reset ----
 
     def test_reset_state_restores_defaults(self):
-        self.officer.parse_and_execute("[ACTION:LIGHT_ON]")
         self.officer.parse_and_execute("[ACTION:ADD_TASK:Buy milk]")
         executed = self.officer.parse_and_execute("[ACTION:RESET_STATE]")
-        self.assertIn("Smart home state reset to defaults.", executed)
-        self.assertEqual(self.officer.state["devices"]["living_room_light"]["status"], "off")
+        self.assertIn("Tasks and timers reset to defaults.", executed)
         self.assertNotIn("Buy milk", self.officer.state["tasks"])
+        self.assertEqual(self.officer.state["timers"], [])
+
+    # ---- Timers ----
 
     def test_set_timer_seconds(self):
         executed = self.officer.parse_and_execute("[ACTION:SET_TIMER:90]")
@@ -197,12 +257,13 @@ class TestExecutiveOfficer(unittest.TestCase):
         self.officer.stop()
         self.assertFalse(self.officer._running)
 
+    # ---- Persistence ----
+
     def test_stale_timers_pruned_on_load(self):
         import json
 
         path = os.path.join(self.tmp.name, "stale.json")
         state = {
-            "devices": {},
             "tasks": [],
             "timers": [
                 {"label": "Old", "due": time.time() - 3600},
@@ -219,7 +280,6 @@ class TestExecutiveOfficer(unittest.TestCase):
 
         path = os.path.join(self.tmp.name, "grace.json")
         state = {
-            "devices": {},
             "tasks": [],
             "timers": [{"label": "Recent", "due": time.time() - 30}],
         }
@@ -228,66 +288,17 @@ class TestExecutiveOfficer(unittest.TestCase):
         officer = ExecutiveOfficer(state_file=path)
         self.assertEqual([t["label"] for t in officer.state["timers"]], ["Recent"])
 
-    def test_lock_door(self):
-        executed = self.officer.parse_and_execute("[ACTION:LOCK_DOOR]")
-        self.assertIn("Main entrance: SECURED", executed)
-        self.assertEqual(self.officer.state["devices"]["main_door"]["status"], "locked")
+    def test_old_device_state_file_is_ignored(self):
+        import json
 
-    def test_unlock_door(self):
-        self.officer.parse_and_execute("[ACTION:UNLOCK_DOOR]")
-        self.assertEqual(self.officer.state["devices"]["main_door"]["status"], "unlocked")
+        path = os.path.join(self.tmp.name, "legacy.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"devices": {"living_room_light": {"status": "on"}}}, f)
+        officer = ExecutiveOfficer(state_file=path)
+        self.assertNotIn("devices", officer.state)
+        self.assertEqual(len(officer.state["tasks"]), 3)
 
-    def test_safety_intent_skipped_when_confirm_declines(self):
-        executed = self.officer.parse_and_execute(
-            "[ACTION:UNLOCK_DOOR]", confirm=lambda _: False
-        )
-        self.assertEqual(executed, [])
-        self.assertEqual(self.officer.state["devices"]["main_door"]["status"], "locked")
-
-    def test_safety_intent_executes_when_confirm_accepts(self):
-        executed = self.officer.parse_and_execute(
-            "[ACTION:UNLOCK_DOOR]", confirm=lambda _: True
-        )
-        self.assertIn("Main entrance: UNLOCKED", executed)
-        self.assertEqual(self.officer.state["devices"]["main_door"]["status"], "unlocked")
-
-    def test_remove_task_skipped_when_confirm_declines(self):
-        executed = self.officer.parse_and_execute(
-            "[ACTION:REMOVE_TASK:Call the dentist]", confirm=lambda _: False
-        )
-        self.assertEqual(executed, [])
-        self.assertIn("Call the dentist", self.officer.state["tasks"])
-
-    def test_non_safety_intent_not_gated_by_confirm(self):
-        executed = self.officer.parse_and_execute(
-            "[ACTION:LIGHT_ON]", confirm=lambda _: False
-        )
-        self.assertIn("Living room light: ACTIVE", executed)
-        self.assertEqual(self.officer.state["devices"]["living_room_light"]["status"], "on")
-
-    def test_add_task_strips_whitespace(self):
-        executed = self.officer.parse_and_execute("[ACTION:ADD_TASK: Buy milk]")
-        self.assertIn("Task synchronization successful: Buy milk", executed)
-        self.assertIn("Buy milk", self.officer.state["tasks"])
-
-    def test_add_task_default_name(self):
-        self.officer.parse_and_execute("[ACTION:ADD_TASK]")
-        self.assertIn("New Task", self.officer.state["tasks"])
-
-    def test_remove_task(self):
-        executed = self.officer.parse_and_execute("[ACTION:REMOVE_TASK:Call the dentist]")
-        self.assertIn("Task removed: Call the dentist", executed)
-        self.assertNotIn("Call the dentist", self.officer.state["tasks"])
-
-    def test_remove_task_missing_returns_message(self):
-        executed = self.officer.parse_and_execute("[ACTION:REMOVE_TASK:Nonexistent task]")
-        self.assertIn("No task found named 'Nonexistent task'.", executed)
-
-    def test_status_report_mentions_devices_and_tasks(self):
-        report = self.officer.parse_and_execute("[ACTION:STATUS_REPORT]")
-        self.assertTrue(report)
-        self.assertIn("living_room_light", report[0])
-        self.assertIn("Tasks:", report[0])
+    # ---- Weather ----
 
     def test_weather_report_uses_injected_provider(self):
         self.officer.set_weather_provider(lambda loc: "It is sunny here.")
@@ -300,23 +311,50 @@ class TestExecutiveOfficer(unittest.TestCase):
         self.officer.parse_and_execute("[ACTION:WEATHER_REPORT]")
         self.assertEqual(seen, [CONFIG["LOCATION"]])
 
+    # ---- Reporting ----
+
+    @mock.patch("keerthi.system.get_metrics", return_value=METRICS)
+    def test_status_report(self, _metrics):
+        report = self.officer.parse_and_execute("[ACTION:STATUS_REPORT]")
+        self.assertIn("CPU 42%", report[0])
+        self.assertIn("Tasks:", report[0])
+
+    @mock.patch("keerthi.system.list_processes", return_value=PROCESSES)
+    @mock.patch("keerthi.system.get_metrics", return_value=METRICS)
+    def test_get_summary_includes_live_data(self, _metrics, _procs):
+        summary = self.officer.get_summary()
+        self.assertEqual(summary["system"], METRICS)
+        self.assertEqual(summary["processes"], PROCESSES)
+        self.assertIn("tasks", summary)
+        self.assertIn("timers", summary)
+
+    # ---- General behaviour ----
+
     def test_unknown_intent_is_ignored(self):
         executed = self.officer.parse_and_execute("[ACTION:DOOM_LAUNCH]")
         self.assertEqual(executed, [])
 
     def test_multiple_actions_in_one_response(self):
-        executed = self.officer.parse_and_execute(
-            "[ACTION:LIGHT_ON][ACTION:SET_TEMP:20][ACTION:ADD_TASK:Call dentist]"
-        )
+        with (
+            mock.patch("keerthi.system.get_metrics", return_value=METRICS),
+            mock.patch("keerthi.system.open_app", return_value="Opened notepad."),
+        ):
+            executed = self.officer.parse_and_execute(
+                "[ACTION:CPU_USAGE][ACTION:OPEN_APP:notepad][ACTION:ADD_TASK:Call dentist]"
+            )
         self.assertEqual(len(executed), 3)
 
     def test_state_not_shared_between_instances(self):
         other = self._make_officer("other.json")
-        self.officer.parse_and_execute("[ACTION:LIGHT_ON]")
-        self.assertEqual(other.state["devices"]["living_room_light"]["status"], "off")
+        self.officer.parse_and_execute("[ACTION:ADD_TASK:Private task]")
+        self.assertNotIn("Private task", other.state["tasks"])
 
-    def test_get_summary_returns_state(self):
-        self.assertIs(self.officer.get_summary(), self.officer.state)
+    def test_non_safety_intent_not_gated_by_confirm(self):
+        with mock.patch("keerthi.system.open_app", return_value="Opened notepad."):
+            executed = self.officer.parse_and_execute(
+                "[ACTION:OPEN_APP:notepad]", confirm=lambda _: False
+            )
+        self.assertEqual(executed, ["Opened notepad."])
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 [project]
 name = "keerthi-ai"
-version = "2.2.0"
-description = "KEERTHI AI — conversational voice assistant for Windows with a simulated smart home."
+version = "2.3.0"
+description = "KEERTHI AI — conversational voice assistant for Windows with real system control (psutil)."
 requires-python = ">=3.11"
 
 [tool.ruff]

@@ -1,35 +1,53 @@
 import { useEffect, useRef, useState } from 'react'
 import Markdown from 'react-markdown'
 import {
-  Blinds,
   Bot,
   CheckCircle2,
   Clock,
-  DoorClosed,
-  Fan,
-  Flame,
-  Lightbulb,
+  Cpu,
+  Database,
+  FolderOpen,
+  HardDrive,
   Mic,
   MicOff,
-  Power,
+  Monitor,
+  Play,
   RefreshCw,
   Send,
-  Snowflake,
-  Tv,
+  Terminal,
+  Trash2,
   User,
   Wifi,
   WifiOff,
 } from 'lucide-react'
 
-type DeviceInfo = {
-  status: string
-  brightness?: number
-  temp?: number
-  speed?: number
+type SystemMetrics = {
+  cpu: number
+  cores: number
+  memoryUsed: number
+  memoryTotal: number
+  memoryPercent: number
+  diskUsed: number
+  diskTotal: number
+  diskPercent: number
+  batteryPercent: number | null
+  batteryCharging: boolean | null
+  uptime: number
+  platform: string
+  hostname: string
+  python: string
+}
+
+type ProcessInfo = {
+  pid: number
+  name: string
+  cpu: number
+  memory: number
 }
 
 type ApiState = {
-  devices: Record<string, DeviceInfo>
+  system: SystemMetrics
+  processes: ProcessInfo[]
   tasks: string[]
   timers: { label: string; due: number }[]
 }
@@ -48,78 +66,16 @@ type Message = {
   content: string
 }
 
-type SliderConfig = {
-  intent: string
-  key: 'brightness' | 'temp' | 'speed'
-  min: number
-  max: number
-  step: number
-  suffix: string
-}
-
-type DeviceControl = {
-  key: string
-  label: string
-  icon: typeof Lightbulb
-  onIntent: string
-  offIntent: string
-  activeWhen: (device: DeviceInfo) => boolean
-  slider?: SliderConfig
-}
-
-const DEVICE_CONTROLS: DeviceControl[] = [
-  {
-    key: 'living_room_light',
-    label: 'Living Room Light',
-    icon: Lightbulb,
-    onIntent: 'LIGHT_ON',
-    offIntent: 'LIGHT_OFF',
-    activeWhen: (d) => d.status === 'on',
-    slider: { intent: 'SET_BRIGHTNESS', key: 'brightness', min: 0, max: 100, step: 5, suffix: '%' },
-  },
-  {
-    key: 'bedroom_ac',
-    label: 'Bedroom AC',
-    icon: Snowflake,
-    onIntent: 'AC_ON',
-    offIntent: 'AC_OFF',
-    activeWhen: (d) => d.status === 'on',
-    slider: { intent: 'SET_TEMP', key: 'temp', min: 16, max: 30, step: 1, suffix: '°C' },
-  },
-  {
-    key: 'kitchen_fan',
-    label: 'Kitchen Fan',
-    icon: Fan,
-    onIntent: 'FAN_ON',
-    offIntent: 'FAN_OFF',
-    activeWhen: (d) => d.status === 'on',
-    slider: { intent: 'FAN_SPEED', key: 'speed', min: 0, max: 5, step: 1, suffix: '' },
-  },
-  {
-    key: 'living_room_tv',
-    label: 'Living Room TV',
-    icon: Tv,
-    onIntent: 'TV_ON',
-    offIntent: 'TV_OFF',
-    activeWhen: (d) => d.status === 'on',
-  },
-  {
-    key: 'bedroom_curtains',
-    label: 'Bedroom Curtains',
-    icon: Blinds,
-    onIntent: 'CURTAIN_OPEN',
-    offIntent: 'CURTAIN_CLOSE',
-    activeWhen: (d) => d.status === 'open',
-  },
-  {
-    key: 'bathroom_heater',
-    label: 'Bathroom Heater',
-    icon: Flame,
-    onIntent: 'HEATER_ON',
-    offIntent: 'HEATER_OFF',
-    activeWhen: (d) => d.status === 'on',
-    slider: { intent: 'HEATER_TEMP', key: 'temp', min: 0, max: 50, step: 1, suffix: '°C' },
-  },
+const KNOWN_APPS = [
+  'notepad',
+  'calculator',
+  'paint',
+  'explorer',
+  'task manager',
+  'command prompt',
+  'powershell',
+  'control panel',
+  'snipping tool',
 ]
 
 function cleanReply(text: string): string {
@@ -137,9 +93,51 @@ function formatDuration(ms: number): string {
   return `${sec}s`
 }
 
-function getRecognition(): { new (): any } | null {
-  const w = window as any
-  return w.SpeechRecognition || w.webkitSpeechRecognition || null
+function formatBytes(n: number): string {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let size = n
+  let i = 0
+  while (size >= 1024 && i < units.length - 1) {
+    size /= 1024
+    i++
+  }
+  return `${size.toFixed(i === 0 ? 0 : 1)} ${units[i]}`
+}
+
+function formatUptime(seconds: number): string {
+  const d = Math.floor(seconds / 86400)
+  const h = Math.floor((seconds % 86400) / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  if (d > 0) return `${d}d ${h}h`
+  if (h > 0) return `${h}h ${m}m`
+  return `${m}m`
+}
+
+async function toPcm16(blob: Blob): Promise<ArrayBuffer> {
+  const arrayBuffer = await blob.arrayBuffer()
+  const audioCtx = new AudioContext()
+  try {
+    const decoded = await audioCtx.decodeAudioData(arrayBuffer)
+    const targetRate = 16000
+    const offline = new OfflineAudioContext(
+      1,
+      Math.ceil(decoded.duration * targetRate),
+      targetRate,
+    )
+    const source = offline.createBufferSource()
+    source.buffer = decoded
+    source.connect(offline.destination)
+    source.start()
+    const rendered = await offline.startRendering()
+    const channel = rendered.getChannelData(0)
+    const pcm = new Int16Array(channel.length)
+    for (let i = 0; i < channel.length; i++) {
+      pcm[i] = Math.max(-1, Math.min(1, channel[i])) * 0x7fff
+    }
+    return pcm.buffer
+  } finally {
+    audioCtx.close()
+  }
 }
 
 async function postChat(message: string, confirmed = false): Promise<ChatResponse> {
@@ -186,51 +184,131 @@ async function fetchState(): Promise<ApiState> {
   return res.json()
 }
 
-function DeviceSlider({
-  slider,
+function Gauge({
+  label,
   value,
-  onCommit,
+  color,
 }: {
-  slider: SliderConfig
-  value: number
-  onCommit: (value: number) => void
+  label: string
+  value: number | null
+  color: string
 }) {
-  const [draft, setDraft] = useState(value)
-  const lastRef = useRef(value)
+  const pct = value === null ? 0 : Math.max(0, Math.min(100, value))
+  const r = 26
+  const c = 2 * Math.PI * r
+  const dash = (pct / 100) * c
+  return (
+    <div className="flex flex-col items-center gap-1">
+      <svg width="68" height="68" viewBox="0 0 64 64">
+        <circle cx="32" cy="32" r={r} fill="none" strokeWidth="6" className="stroke-slate-800" />
+        <circle
+          cx="32"
+          cy="32"
+          r={r}
+          fill="none"
+          strokeWidth="6"
+          stroke={color}
+          strokeLinecap="round"
+          strokeDasharray={`${dash} ${c}`}
+          transform="rotate(-90 32 32)"
+        />
+        <text
+          x="32"
+          y="35"
+          textAnchor="middle"
+          fill="currentColor"
+          fontSize="13"
+          fontWeight="600"
+          className="fill-slate-100"
+        >
+          {value === null ? '—' : value}
+        </text>
+      </svg>
+      <span className="text-[11px] text-slate-400">{label}</span>
+    </div>
+  )
+}
 
-  useEffect(() => {
-    setDraft(value)
-  }, [value])
+function FileBrowser() {
+  const [path, setPath] = useState('')
+  const [listing, setListing] = useState<{ path: string; entries: { name: string; isDir: boolean }[] } | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
-  function commit(v: number) {
-    if (v !== lastRef.current) {
-      lastRef.current = v
-      onCommit(v)
+  async function load(target: string) {
+    try {
+      const params = new URLSearchParams()
+      if (target) params.set('path', target)
+      const res = await fetch(`/api/files?${params}`)
+      if (!res.ok) throw new Error(String(res.status))
+      const data = await res.json()
+      setListing(data)
+      setPath(data.path ?? target)
+      setError(data.error ?? null)
+    } catch {
+      setError('Could not read that folder.')
     }
   }
 
+  useEffect(() => {
+    load('')
+  }, [])
+
+  const parts = (listing?.path ?? '').split(/[\\/]/)
+
   return (
-    <div className="mt-2">
-      <div className="flex items-center justify-between text-xs text-slate-400">
-        <span>{slider.key}</span>
-        <span>
-          {draft}
-          {slider.suffix}
-        </span>
+    <div>
+      <div className="mb-2 flex gap-2">
+        <input
+          value={path}
+          onChange={(e) => setPath(e.target.value)}
+          placeholder="Folder path (e.g. C:\Users)"
+          className="min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs outline-none focus:border-cyan-500"
+        />
+        <button
+          onClick={() => load(path)}
+          className="rounded-md bg-slate-800 px-2 py-1 text-xs hover:bg-slate-700"
+        >
+          Go
+        </button>
       </div>
-      <input
-        type="range"
-        min={slider.min}
-        max={slider.max}
-        step={slider.step}
-        value={draft}
-        onChange={(e) => setDraft(Number(e.target.value))}
-        onPointerUp={() => commit(draft)}
-        onKeyUp={() => commit(draft)}
-        className="w-full accent-cyan-500"
-      />
+      {error && <p className="mb-2 text-xs text-red-400">{error}</p>}
+      <div className="max-h-40 overflow-y-auto rounded-md border border-slate-800">
+        <button
+          onClick={() => load(parts.slice(0, -1).join('\\') || '\\')}
+          className="block w-full px-2 py-1 text-left text-xs text-slate-400 hover:bg-slate-800"
+        >
+          ← up one level
+        </button>
+        {(listing?.entries ?? []).map((entry) => (
+          <div
+            key={entry.name}
+            className="flex items-center justify-between px-2 py-1 text-xs hover:bg-slate-800"
+          >
+            <button
+              onClick={() => (entry.isDir ? load(joinPath(path, entry.name)) : undefined)}
+              className="flex min-w-0 items-center gap-1.5 truncate text-left"
+            >
+              <FolderOpen className={`h-3.5 w-3.5 shrink-0 ${entry.isDir ? 'text-amber-400' : 'text-slate-500'}`} />
+              <span className="truncate">{entry.name}</span>
+            </button>
+            {!entry.isDir && (
+              <button
+                onClick={() => postAction('OPEN_FILE', [joinPath(path, entry.name)])}
+                className="shrink-0 text-cyan-400 hover:text-cyan-300"
+                title="Open file"
+              >
+                <Play className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   )
+}
+
+function joinPath(dir: string, name: string): string {
+  return dir ? `${dir.replace(/[\\/]+$/, '')}\\${name}` : name
 }
 
 export default function App() {
@@ -242,11 +320,18 @@ export default function App() {
   const [pendingIntents, setPendingIntents] = useState<string[]>([])
   const [wsConnected, setWsConnected] = useState(false)
   const [listening, setListening] = useState(false)
+  const [selectedApp, setSelectedApp] = useState(KNOWN_APPS[0])
+  const [command, setCommand] = useState('')
   const [now, setNow] = useState(Date.now())
+  const recorderRef = useRef<MediaRecorder | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     fetchState().then(setState).catch(() => undefined)
+    const interval = setInterval(() => {
+      fetchState().then(setState).catch(() => undefined)
+    }, 2000)
+    return () => clearInterval(interval)
   }, [])
 
   useEffect(() => {
@@ -313,22 +398,26 @@ export default function App() {
     ])
   }
 
-  async function handleSend() {
-    const message = input.trim()
-    if (!message || loading) return
+  async function sendMessage(message: string) {
+    const text = message.trim()
+    if (!text || loading) return
     setLoading(true)
     setInput('')
     setPendingToken(null)
     setPendingIntents([])
-    setMessages((prev) => [...prev, { role: 'user', content: message }])
+    setMessages((prev) => [...prev, { role: 'user', content: text }])
 
     try {
-      applyResult(await postChat(message))
+      applyResult(await postChat(text))
     } catch {
       pushError()
     } finally {
       setLoading(false)
     }
+  }
+
+  async function handleSend() {
+    sendMessage(input)
   }
 
   async function handleConfirm(confirmed: boolean) {
@@ -358,12 +447,6 @@ export default function App() {
     }
   }
 
-  function toggleDevice(control: DeviceControl) {
-    if (!state) return
-    const device = state.devices[control.key]
-    runAction(control.activeWhen(device) ? control.offIntent : control.onIntent)
-  }
-
   async function handleReset() {
     await fetch('/api/reset', { method: 'POST' })
     setMessages([])
@@ -373,22 +456,54 @@ export default function App() {
   }
 
   function startListening() {
-    const Recognition = getRecognition()
-    if (!Recognition) return
-    const recognition = new Recognition()
-    recognition.lang = 'en-IN'
-    recognition.continuous = false
-    recognition.interimResults = false
-    recognition.onresult = (event: any) => {
-      const transcript = event.results[0][0].transcript as string
-      setInput(transcript)
-      setListening(false)
+    if (listening) {
+      recorderRef.current?.stop()
+      return
     }
-    recognition.onerror = () => setListening(false)
-    recognition.onend = () => setListening(false)
-    setListening(true)
-    recognition.start()
+    navigator.mediaDevices
+      .getUserMedia({ audio: true })
+      .then((stream) => {
+        setListening(true)
+        const recorder = new MediaRecorder(stream)
+        recorderRef.current = recorder
+        const chunks: Blob[] = []
+        recorder.ondataavailable = (e) => {
+          if (e.data.size > 0) chunks.push(e.data)
+        }
+        recorder.onstop = async () => {
+          stream.getTracks().forEach((track) => track.stop())
+          setListening(false)
+          try {
+            const blob = new Blob(chunks, { type: recorder.mimeType })
+            const pcm = await toPcm16(blob)
+            const res = await fetch('/api/transcribe', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/octet-stream' },
+              body: pcm,
+            })
+            if (!res.ok) throw new Error(String(res.status))
+            const data = await res.json()
+            sendMessage(data.text)
+          } catch {
+            pushError()
+          }
+        }
+        recorder.start()
+      })
+      .catch(() => {
+        setListening(false)
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: 'assistant',
+            content:
+              "I couldn't access your microphone — allow mic permission in the browser and try again.",
+          },
+        ])
+      })
   }
+
+  const system = state?.system
 
   return (
     <div className="flex h-screen bg-slate-950 text-slate-100">
@@ -396,7 +511,7 @@ export default function App() {
         <header className="flex items-center gap-3 border-b border-slate-800 px-6 py-4">
           <Bot className="h-6 w-6 text-cyan-400" />
           <h1 className="text-lg font-semibold">KEERTHI</h1>
-          <span className="text-xs text-slate-400">AI Voice Assistant</span>
+          <span className="text-xs text-slate-400">System Assistant</span>
           <span
             className={`ml-2 inline-flex items-center gap-1 text-xs ${
               wsConnected ? 'text-emerald-400' : 'text-slate-500'
@@ -418,7 +533,7 @@ export default function App() {
         <section className="flex-1 space-y-4 overflow-y-auto px-6 py-4">
           {messages.length === 0 && (
             <p className="pt-16 text-center text-slate-500">
-              Ask KEERTHI to turn on the lights, set a timer, or check the weather.
+              Ask KEERTHI to check CPU usage, open an app, run a command, or set a timer.
             </p>
           )}
           {messages.map((msg, i) => (
@@ -497,12 +612,12 @@ export default function App() {
             <button
               type="button"
               onClick={startListening}
-              disabled={loading || !getRecognition()}
+              disabled={loading}
               className="inline-flex items-center gap-2 rounded-md border border-slate-700 px-4 py-2 text-sm hover:bg-slate-800 disabled:opacity-40"
               title="Voice input"
             >
               {listening ? <MicOff className="h-4 w-4 text-red-400" /> : <Mic className="h-4 w-4" />}
-              <span className="hidden sm:inline">{listening ? 'Listening…' : 'Mic'}</span>
+              <span className="hidden sm:inline">{listening ? 'Recording… tap to stop' : 'Mic'}</span>
             </button>
             <input
               value={input}
@@ -521,78 +636,147 @@ export default function App() {
         </footer>
       </main>
 
-      <aside className="w-80 overflow-y-auto border-l border-slate-800 bg-slate-900/50 p-4">
-        <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-400">
-          <Power className="h-4 w-4" /> Smart Home
-        </h2>
-        {state && (
+      <aside className="w-[22rem] overflow-y-auto border-l border-slate-800 bg-slate-900/50 p-4">
+        {system && (
           <>
-            <ul className="mb-4 space-y-2">
-              {DEVICE_CONTROLS.map((control) => {
-                const device = state.devices[control.key]
-                if (!device) return null
-                const active = control.activeWhen(device)
-                const Icon = control.icon
-                return (
-                  <li
-                    key={control.key}
-                    className="rounded-md border border-slate-800 px-3 py-2 text-sm"
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="flex items-center gap-2">
-                        <Icon
-                          className={`h-4 w-4 ${active ? 'text-cyan-400' : 'text-slate-500'}`}
-                        />
-                        {control.label}
-                      </span>
-                      <button
-                        onClick={() => toggleDevice(control)}
-                        className={`rounded-md px-2 py-1 text-xs font-medium ${
-                          active
-                            ? 'bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/30'
-                            : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-                        }`}
-                      >
-                        {active ? 'ON' : 'OFF'}
-                      </button>
-                    </div>
-                    {control.slider && (
-                      <DeviceSlider
-                        slider={control.slider}
-                        value={Number(device[control.slider.key] ?? 0)}
-                        onCommit={(v) =>
-                          runAction(control.slider!.intent, [String(v)])
-                        }
-                      />
-                    )}
-                  </li>
-                )
-              })}
-              <li className="flex items-center justify-between rounded-md border border-slate-800 px-3 py-2 text-sm">
-                <span className="flex items-center gap-2">
-                  <DoorClosed className="h-4 w-4 text-slate-500" />
-                  Main Door
-                </span>
-                <span
-                  className={
-                    state.devices.main_door?.status === 'unlocked'
-                      ? 'text-amber-400'
-                      : 'text-emerald-400'
+            <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-slate-400">
+              <Monitor className="h-4 w-4" /> {system.hostname}
+            </h2>
+            <div className="mb-2 grid grid-cols-4 gap-2">
+              <Gauge label="CPU" value={system.cpu} color="#22d3ee" />
+              <Gauge label="RAM" value={system.memoryPercent} color="#a78bfa" />
+              <Gauge label="Disk" value={system.diskPercent} color="#34d399" />
+              <Gauge
+                label="Battery"
+                value={system.batteryPercent}
+                color="#fbbf24"
+              />
+            </div>
+            <div className="mb-4 grid grid-cols-2 gap-x-3 gap-y-1 rounded-md border border-slate-800 px-3 py-2 text-xs text-slate-400">
+              <span>
+                <Cpu className="mr-1 inline h-3.5 w-3.5" />
+                {system.cores} cores
+              </span>
+              <span>
+                <Clock className="mr-1 inline h-3.5 w-3.5" />
+                up {formatUptime(system.uptime)}
+              </span>
+              <span className="col-span-2">
+                <HardDrive className="mr-1 inline h-3.5 w-3.5" />
+                {formatBytes(system.memoryUsed)} / {formatBytes(system.memoryTotal)} RAM ·{' '}
+                {formatBytes(system.diskUsed)} / {formatBytes(system.diskTotal)} disk
+              </span>
+              <span className="col-span-2 text-slate-500">
+                {system.platform} · Python {system.python}
+              </span>
+            </div>
+
+            <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <Play className="h-3.5 w-3.5" /> Launch App
+            </h3>
+            <div className="mb-4 flex gap-2">
+              <select
+                value={selectedApp}
+                onChange={(e) => setSelectedApp(e.target.value)}
+                className="min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-900 px-2 py-1.5 text-sm outline-none focus:border-cyan-500"
+              >
+                {KNOWN_APPS.map((app) => (
+                  <option key={app} value={app}>
+                    {app}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={() => runAction('OPEN_APP', [selectedApp])}
+                disabled={loading}
+                className="rounded-md bg-cyan-600 px-3 py-1.5 text-sm font-medium hover:bg-cyan-500 disabled:opacity-50"
+              >
+                Open
+              </button>
+            </div>
+
+            <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <Terminal className="h-3.5 w-3.5" /> Run Command
+            </h3>
+            <div className="mb-4 flex gap-2">
+              <input
+                value={command}
+                onChange={(e) => setCommand(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && command.trim()) {
+                    runAction('RUN_COMMAND', [command])
+                    setCommand('')
                   }
-                >
-                  {state.devices.main_door?.status}
-                </span>
-              </li>
-            </ul>
+                }}
+                placeholder="e.g. echo hello"
+                className="min-w-0 flex-1 rounded-md border border-slate-700 bg-slate-900 px-2 py-1.5 text-sm outline-none focus:border-cyan-500"
+              />
+              <button
+                onClick={() => {
+                  if (command.trim()) {
+                    runAction('RUN_COMMAND', [command])
+                    setCommand('')
+                  }
+                }}
+                disabled={loading || !command.trim()}
+                className="rounded-md bg-slate-800 px-3 py-1.5 text-sm hover:bg-slate-700 disabled:opacity-50"
+              >
+                Run
+              </button>
+            </div>
+
+            <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <FolderOpen className="h-3.5 w-3.5" /> Files
+            </h3>
+            <div className="mb-4">
+              <FileBrowser />
+            </div>
+
+            <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <Database className="h-3.5 w-3.5" /> Processes
+            </h3>
+            <div className="mb-4 max-h-48 overflow-y-auto rounded-md border border-slate-800">
+              <table className="w-full text-xs">
+                <thead className="sticky top-0 bg-slate-900 text-slate-500">
+                  <tr>
+                    <th className="px-2 py-1 text-left font-medium">Name</th>
+                    <th className="px-2 py-1 text-right font-medium">CPU</th>
+                    <th className="px-2 py-1 text-right font-medium">MEM</th>
+                    <th className="px-2 py-1" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {(state?.processes ?? []).map((proc) => (
+                    <tr key={proc.pid} className="border-t border-slate-800/60">
+                      <td className="max-w-[8rem] truncate px-2 py-1" title={`PID ${proc.pid}`}>
+                        {proc.name}
+                      </td>
+                      <td className="px-2 py-1 text-right">{proc.cpu}%</td>
+                      <td className="px-2 py-1 text-right">{proc.memory}%</td>
+                      <td className="px-2 py-1 text-right">
+                        <button
+                          onClick={() => runAction('KILL_PROCESS', [String(proc.pid)])}
+                          disabled={loading}
+                          className="text-red-400 hover:text-red-300 disabled:opacity-40"
+                          title={`Kill ${proc.name} (PID ${proc.pid})`}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
 
             <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
               Tasks
             </h3>
-            {state.tasks.length === 0 ? (
-              <p className="text-sm text-slate-500">No tasks.</p>
+            {state?.tasks.length === 0 ? (
+              <p className="mb-4 text-sm text-slate-500">No tasks.</p>
             ) : (
               <ul className="mb-4 space-y-1 text-sm">
-                {state.tasks.map((task) => (
+                {state?.tasks.map((task) => (
                   <li key={task} className="flex items-center gap-2">
                     <span className="h-1.5 w-1.5 rounded-full bg-cyan-500" /> {task}
                   </li>
@@ -603,11 +787,11 @@ export default function App() {
             <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
               <Clock className="h-3.5 w-3.5" /> Timers
             </h3>
-            {state.timers.length === 0 ? (
+            {state?.timers.length === 0 ? (
               <p className="text-sm text-slate-500">No timers.</p>
             ) : (
               <ul className="space-y-1 text-sm">
-                {state.timers.map((timer, i) => (
+                {state?.timers.map((timer, i) => (
                   <li key={i} className="flex items-center justify-between gap-2">
                     <span className="flex items-center gap-2">
                       <span className="h-1.5 w-1.5 rounded-full bg-amber-500" /> {timer.label}

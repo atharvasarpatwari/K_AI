@@ -164,11 +164,14 @@ class PeripheralController:
         table.add_column("Category", style="cyan")
         table.add_column("Details", style="white")
 
-        # Devices
-        dev_str = ", ".join(
-            [f"{k}: {v.get('status', 'unknown')}" for k, v in state["devices"].items()]
+        # Live system metrics
+        sys_metrics = state.get("system") or {}
+        metrics = (
+            f"CPU {sys_metrics.get('cpu', '?')}% | "
+            f"Memory {sys_metrics.get('memoryPercent', '?')}% | "
+            f"Disk {sys_metrics.get('diskPercent', '?')}%"
         )
-        table.add_row("Smart Home", dev_str)
+        table.add_row("System", metrics)
 
         # Tasks
         task_str = " | ".join(state["tasks"][-3:])

@@ -55,11 +55,11 @@ class ConfigDict(TypedDict):
 CONFIG: ConfigDict = {
     "NAME": "KEERTHI",
     "FULL_NAME": "Knowledge-Enhanced Engine for Real-Time Human Intelligence",
-    "VERSION": "2.2.0",
+    "VERSION": "2.3.0",
     "USER_NAME": "Atharva",
     "LOCATION": "Hyderabad, India",
     "GEMINI_API_KEY": os.getenv("GEMINI_API_KEY"),
-    "MODEL_NAME": os.getenv("MODEL_NAME", "gemini-2.5-flash"),
+    "MODEL_NAME": os.getenv("MODEL_NAME", "gemini-3.5-flash"),
     "TTS_RATE": _env_int("TTS_RATE", 175),
     "WAKE_WORDS": ["keerthi", "hey keerthi", "ok keerthi"],
     "USE_MICROPHONE": _env_bool("USE_MICROPHONE", True),
@@ -76,17 +76,8 @@ CONFIG: ConfigDict = {
     "STATE_FILE": os.getenv("STATE_FILE", "keerthi_state.json"),
 }
 
-# Initial state for simulation
+# Initial state for tasks and timers (system metrics are always live)
 INITIAL_STATE = {
-    "devices": {
-        "living_room_light": {"status": "off", "brightness": 0},
-        "bedroom_ac": {"status": "on", "temp": 22},
-        "main_door": {"status": "locked"},
-        "kitchen_fan": {"status": "off", "speed": 0},
-        "living_room_tv": {"status": "off"},
-        "bedroom_curtains": {"status": "closed"},
-        "bathroom_heater": {"status": "off", "temp": 40}
-    },
     "tasks": [
         "Review project proposal",
         "Call the dentist",
@@ -96,7 +87,7 @@ INITIAL_STATE = {
 }
 
 _VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
-_RETIRED_MODEL_PREFIXES = ("gemini-1.5", "gemini-2.0-flash")
+_RETIRED_MODEL_PREFIXES = ("gemini-1.5", "gemini-2.0-flash", "gemini-2.5-flash")
 
 
 def validate_config() -> None:
@@ -108,10 +99,21 @@ def validate_config() -> None:
             stacklevel=2,
         )
 
-    if CONFIG["MODEL_NAME"].startswith(_RETIRED_MODEL_PREFIXES):
+    if CONFIG["MODEL_NAME"] == "gemini-2.5-flash":
+        warnings.warn(
+            "MODEL_NAME 'gemini-2.5-flash' is retired for new API keys — "
+            "using gemini-3.5-flash instead.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    if (
+        CONFIG["MODEL_NAME"].startswith(_RETIRED_MODEL_PREFIXES)
+        and CONFIG["MODEL_NAME"] != "gemini-2.5-flash"
+    ):
         warnings.warn(
             f"MODEL_NAME '{CONFIG['MODEL_NAME']}' is retired — use a current model "
-            "such as gemini-2.5-flash.",
+            "such as gemini-3.5-flash.",
             RuntimeWarning,
             stacklevel=2,
         )

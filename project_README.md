@@ -1,14 +1,14 @@
 # KEERTHI AI Voice Assistant (Python Suite)
 
-A highly advanced, conversational voice assistant powered by **Gemini 2.5 Flash**.
+A highly advanced, conversational voice assistant powered by **Gemini 3.5 Flash**.
 
 ## Features
 - **Intelligent Conversations**: Powered by Google's state-of-the-art LLMs.
-- **Executive Logic**: Capable of "parsing intent" from conversational speech (e.g., controlling a simulated smart home).
+- **Executive Logic**: Capable of "parsing intent" from conversational speech (e.g., controlling the computer it runs on).
 - **Proactive Personality**: Configured with a calm, witty, and helpful persona.
 - **Modular Design**: Clean separation between AI Brain, Peripherals, and Executive Logic.
-- **Smart Home Simulation**: Lights, AC, kitchen fan, and door security controlled via `[ACTION:...]` tags.
-- **State Persistence**: Smart-home state survives restarts via `keerthi_state.json`.
+- **Full Machine Access**: Live CPU/memory/disk/battery metrics, process listing/kill, app launch, command runner, and file browsing via `[ACTION:...]` tags.
+- **State Persistence**: Task/timer state survives restarts via `keerthi_state.json`.
 - **Microphone Input**: Optional speech-to-text via `SpeechRecognition` (falls back to text input).
 - **Conversation Management**: `/reset` clears context; wake words acknowledged.
 
@@ -35,17 +35,16 @@ A highly advanced, conversational voice assistant powered by **Gemini 2.5 Flash*
 | ------------------------- | -------------------------------------------------- |
 | `python main.py`          | Run with microphone input (falls back to typing)   |
 | `python main.py --text`   | Force text-input mode                              |
-| `python main.py --fresh`  | Ignore saved smart-home state, start fresh         |
+| `python main.py --fresh`  | Ignore saved task/timer state, start fresh     |
 | `python main.py --version`| Print version and exit                             |
 | `exit` / `quit`           | Power down                                         |
 | `/reset`                  | Clear conversation history                         |
 | `"keerthi"`               | Wake-word acknowledgment                           |
 
-## Supported Smart-Home Actions
-`LIGHT_ON`, `LIGHT_OFF`, `SET_BRIGHTNESS`, `AC_ON`, `AC_OFF`, `SET_TEMP`,
-`FAN_ON`, `FAN_OFF`, `FAN_SPEED`, `TV_ON`, `TV_OFF`, `CURTAIN_OPEN`,
-`CURTAIN_CLOSE`, `HEATER_ON`, `HEATER_OFF`, `HEATER_TEMP`, `LOCK_DOOR`,
-`UNLOCK_DOOR`, `ADD_TASK`, `REMOVE_TASK`, `STATUS_REPORT`, `WEATHER_REPORT`,
+## Supported System Actions
+`SYSTEM_STATUS`, `CPU_USAGE`, `MEMORY_USAGE`, `DISK_USAGE`, `BATTERY_STATUS`,
+`LIST_PROCESSES`, `KILL_PROCESS`, `OPEN_APP`, `RUN_COMMAND`, `FILE_LIST`,
+`OPEN_FILE`, `ADD_TASK`, `REMOVE_TASK`, `STATUS_REPORT`, `WEATHER_REPORT`,
 `SET_TIMER`, `CANCEL_TIMER`, `CHECK_TIMERS`, `RESET_STATE`
 
 ## Configuration (all optional, via `.env`)
@@ -60,7 +59,7 @@ python -m unittest discover -s tests -v
 
 ## Customization
 - **Persona**: Modify `keerthi/brain.py` system prompt.
-- **Smart Home**: Extend `keerthi/executive.py` with real IoT integrations.
+- **System Control**: Extend `keerthi/executive.py` + `keerthi/system.py` with new capabilities.
 - **Hardware**: Update `keerthi/peripherals.py` for specific microphone or speaker setups.
 
 ---

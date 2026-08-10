@@ -1,22 +1,24 @@
 # KEERTHI AI — Project Documentation (for review)
 
-**Document date:** 2026-08-10 · **Version:** 2.2.0 · **Language:** Python 3.13
+**Document date:** 2026-08-10 · **Version:** 2.3.0 · **Language:** Python 3.13
 
 ---
 
 ## 1. Overview
 
 KEERTHI (*Knowledge-Enhanced Engine for Real-Time Human Intelligence*) is a
-conversational voice assistant for Windows, powered by **Google Gemini 2.5 Flash**.
+conversational voice assistant for Windows, powered by **Google Gemini 3.5 Flash**.
 It combines:
 
 - an LLM "brain" for natural conversation,
 - an "executive" layer that parses `[ACTION:...]` tags out of the model's text and
-  mutates a **simulated smart home** state,
+  performs **real operations on the user's computer**,
 - a "peripherals" layer for console UI, text-to-speech, and optional speech-to-text.
 
-The smart home is a simulation (no real IoT hardware). State is persisted to a JSON
-file so device/task state survives restarts.
+The assistant has full access to the machine it runs on: it can report live
+CPU/memory/disk/battery metrics, list and terminate processes, launch apps, run
+commands, and browse/open files — with explicit user confirmation for destructive
+operations. Task/timer state is persisted to a JSON file so it survives restarts.
 
 ---
 
@@ -40,12 +42,13 @@ E:\KeerthiAI\
 ├── package.json / tsconfig.json  React/Vite web frontend manifest + TS config
 ├── vite.config.ts                Vite dev server (proxies /api -> :8000)
 ├── index.html                    Web app entry HTML
-├── src/                          React frontend (chat + smart-home dashboard)
+├── src/                          React frontend (chat + system dashboard)
 │   ├── main.tsx
 │   ├── App.tsx
+│   ├── App.test.tsx
 │   └── index.css
 ├── KEERTHI_Technical_Report (Repaired).docx   Original project report (untouched)
-├── keerthi_state.json            Created at runtime (smart-home persistence)
+├── keerthi_state.json            Created at runtime (task/timer persistence)
 └── keerthi/
     ├── __init__.py               Empty package marker
     ├── config.py                 CONFIG TypedDict, env helpers, validate_config()
@@ -53,13 +56,14 @@ E:\KeerthiAI\
     ├── executive.py              ExecutiveOfficer (action dispatch + timers + persistence)
     ├── peripherals.py            PeripheralController (TTS/STT/console)
     ├── nlp.py                    COMMAND_INTENTS, SAFETY_INTENTS, get_nlp_manifest()
-    ├── server.py                 FastAPI web backend (/api/chat, /api/state, /api/reset)
+    ├── system.py                 Real system control (psutil metrics, processes, apps, commands, files)
+    ├── server.py                 FastAPI web backend (/api/chat, /api/action, /api/state, ...)
     └── services/
         ├── __init__.py
         └── weather.py            Open-Meteo weather lookup (geocode + current conditions)
 ```
 
-`tests/` contains 10 test modules (103 tests, stdlib `unittest`).
+`tests/` contains 11 test modules (131 tests, stdlib `unittest`).
 
 ---
 
@@ -110,7 +114,7 @@ Clean separation of concerns:
 - `CONFIG` dict — all settings, read from `.env` with defaults (see §5).
 - `_env_bool(name, default)` / `_env_int(name, default)` — tolerant env parsing
   (non-numeric ints fall back to default; bool accepts `1/true/yes/on`).
-- `INITIAL_STATE` — baseline simulated devices and tasks.
+- `INITIAL_STATE` — baseline tasks and timers (no simulated devices).
 - `validate_config()` — emits `warnings.warn` at startup for: missing API key,
   invalid `LOG_LEVEL`, `TEMPERATURE` outside [0.0, 2.0], non-positive
   `MAX_OUTPUT_TOKENS` / `MAX_HISTORY_TURNS`, `TTS_RATE` outside [50, 400].
@@ -134,16 +138,21 @@ Clean separation of concerns:
   `:`, looks up the handler in `self._handlers` (unknown intents ignored), collects
   confirmation strings, and **persists state** when any action executed.
 - Handlers (all typed `(args: list[str]) -> str | None`; `None` = no confirmation):
-  - Lighting: `LIGHT_ON`, `LIGHT_OFF`, `SET_BRIGHTNESS` (clamped 0–100; 0 ⇒ off)
-  - Climate: `AC_ON`, `AC_OFF`, `SET_TEMP` (clamped 16–30, defaults 22 when no arg;
-    non-numeric ignored)
-  - Fan: `FAN_ON`, `FAN_OFF`, `FAN_SPEED` (clamped 0–5; 0 ⇒ off)
-  - Security: `LOCK_DOOR`, `UNLOCK_DOOR`
+  - System status: `SYSTEM_STATUS`, `CPU_USAGE`, `MEMORY_USAGE`, `DISK_USAGE`,
+    `BATTERY_STATUS` — live metrics via `keerthi.system.get_metrics()`.
+  - Processes: `LIST_PROCESSES` (top-CPU table), `KILL_PROCESS` by PID
+    (graceful terminate → force kill) *(SAFETY — needs confirmation)*.
+  - Apps & commands: `OPEN_APP` (known launchers + PATH fallback),
+    `RUN_COMMAND` (30 s timeout, 4000-char output cap) *(SAFETY — needs
+    confirmation)*.
+  - Files: `FILE_LIST` (directory listing), `OPEN_FILE` (via `os.startfile`).
   - Tasks: `ADD_TASK` (strips whitespace, default "New Task"), `REMOVE_TASK`
-    (reports if not found)
-  - Reporting: `STATUS_REPORT` (human-readable device + task summary)
-- Helpers: `_first_int(args, default=None)` extracts the first integer from args
-  (default only applied when args are empty); `_clamp(value, low, high)`.
+    (reports if not found) *(SAFETY — needs confirmation)*.
+  - Reporting: `STATUS_REPORT` (combined system + task summary),
+    `WEATHER_REPORT`, `RESET_STATE`, timer intents.
+- Helpers: `_join_args(args)` rejoins colon-split arguments so Windows paths like
+  `C:\Users\me` survive the `[ACTION:...]` tag parser intact.
+- `get_summary()` — returns `{system, processes, tasks, timers}` for the web UI.
 - Timers: `_prune_stale_timers()` drops timers whose `due` is more than
   `TIMER_STALE_GRACE_SECONDS` (60 s) in the past on startup, so a timer that
   expired while the process was down is dropped instead of firing late. Timer
@@ -152,8 +161,6 @@ Clean separation of concerns:
 - Persistence: `_load_state()` on init (ignores missing/corrupt files) and
   `_save_state()` after actions (lock-protected), to `STATE_FILE`
   (default `keerthi_state.json`).
-- Constants: `MAX_FAN_SPEED = 5`, `MAX_BRIGHTNESS = 100`, `MIN_AC_TEMP = 16`,
-  `MAX_AC_TEMP = 30`, `MAX_HEATER_TEMP = 50`.
 
 ### 4.4 `keerthi/peripherals.py` — `PeripheralController`
 - `_init_tts()`: initializes `pyttsx3` (guarded), applies `TTS_RATE`; sets
@@ -173,12 +180,14 @@ Clean separation of concerns:
   (`WHISPER_MODEL`/`WHISPER_DEVICE`); converts int16 PCM → float32 via NumPy;
   transcribes with the `STT_LANGUAGE` base code; falls back to Google on error.
 - `close()`: stops the TTS engine (called at end of session).
-- `show_dashboard(state)`: prints a status table using `.get('status', 'unknown')`
-  so missing keys don't crash.
+- `show_dashboard(state)`: prints a **System Status** table (CPU/memory/disk
+  percentages) using `.get('status', 'unknown')` so missing keys don't crash.
 
 ### 4.5 `keerthi/nlp.py`
-- `COMMAND_INTENTS`: 26 intents with descriptions (single source of truth for the
+- `COMMAND_INTENTS`: system intents with descriptions (single source of truth for the
   command library).
+- `SAFETY_INTENTS` — `{KILL_PROCESS, RUN_COMMAND, REMOVE_TASK}`: destructive
+  operations that require explicit user confirmation (CLI prompt / web confirm).
 - `get_nlp_manifest() -> str`: renders the intents as the `[ACTION]` block injected
   into the system prompt.
 
@@ -202,7 +211,13 @@ Clean separation of concerns:
 - Lazy module singletons `_brain` / `_officer` (see §11 limitation: single worker).
 - Endpoints:
   - `GET /api/health` — readiness probe (`status`, `version`, `apiKeyPresent`).
-  - `GET /api/state` — current smart-home state.
+  - `GET /api/state` — current system state: live metrics, top processes, tasks, timers.
+  - `GET /api/files?path=` — directory listing via `system.list_directory`.
+  - `POST /api/action` — executes a single `[ACTION:...]` (e.g. app launcher,
+    command runner, file open, timer set) and returns confirmations + fresh state.
+  - `POST /api/transcribe` — accepts raw 16 kHz mono int16 PCM audio and returns
+    `{text}` using the configured STT engine (google/vosk/whisper). Empty body → 400;
+    transcription failure → 422.
   - `POST /api/reset` — clears conversation history.
   - `POST /api/chat` — brain → executive flow. When a reply contains a
     `SAFETY_INTENTS` action and `confirmed` is false, it does **not** execute;
@@ -218,6 +233,19 @@ Clean separation of concerns:
 - `startup`/`shutdown` events capture the loop and stop the officer's scheduler
   thread on shutdown.
 
+### 4.8 `keerthi/system.py` — real system control (psutil)
+- `get_metrics()`: live CPU %, core count, memory/disk used/total/%, battery
+  (percent + charging, absent when no battery), uptime, platform, hostname, Python.
+- `list_processes(limit)`: top-CPU processes sorted by CPU (guarded against a
+  sampling race that could return a process list in the wrong order).
+- `kill_process(pid)`: graceful `terminate()` first, force `kill()` on failure;
+  missing pid and denied access reported cleanly.
+- `open_app(name)`: known launcher table (notepad, calc, mspaint, explorer, taskmgr,
+  cmd, powershell, control, snippingtool) with a PATH-shortcut fallback.
+- `run_command(cmd)`: `subprocess.run` with a 30 s timeout and a 4000-char output cap.
+- `list_directory(path)`: sorted `{name, isDir, size}` entries for the web file browser.
+- `open_file(path)`: opens via `os.startfile`.
+
 ---
 
 ## 5. Configuration
@@ -227,7 +255,7 @@ All optional — read from `.env` (see `.env.example`), with defaults shown:
 | Var                | Default           | Purpose                                  |
 | ------------------ | ----------------- | ---------------------------------------- |
 | `GEMINI_API_KEY`   | *(required)*      | Gemini API key (missing ⇒ startup error) |
-| `MODEL_NAME`       | `gemini-2.5-flash`| Gemini model                              |
+| `MODEL_NAME`       | `gemini-3.5-flash`| Gemini model                              |
 | `TTS_RATE`         | `175`             | Speech rate (validated 50–400)           |
 | `USE_MICROPHONE`   | `true`            | Enable mic STT (falls back to typing)    |
 | `STT_LANGUAGE`     | `en-IN`           | Speech-recognition language              |
@@ -250,7 +278,7 @@ All optional — read from `.env` (see `.env.example`), with defaults shown:
 python main.py                # run (mic → text fallback)
 python main.py --text         # force text input
 python main.py --fresh        # start with default state (ignore saved)
-python main.py --version      # print "KEERTHI v2.2.0" and exit
+python main.py --version      # print "KEERTHI v2.3.0" and exit
 ```
 
 In-session commands: `exit` / `quit` / `shutdown` (power down), `/reset`
@@ -258,35 +286,31 @@ In-session commands: `exit` / `quit` / `shutdown` (power down), `/reset`
 
 ---
 
-## 7. Smart-Home Intents
+## 7. System Intents
 
 | Intent           | Arg (optional) | Effect / confirmation                        |
 | ---------------- | -------------- | -------------------------------------------- |
-| `LIGHT_ON`       | –              | living_room_light → on                       |
-| `LIGHT_OFF`      | –              | living_room_light → off                      |
-| `SET_BRIGHTNESS` | `0–100`        | set brightness; 0 ⇒ off, clamped             |
-| `AC_ON`          | –              | bedroom_ac → on                              |
-| `AC_OFF`         | –              | bedroom_ac → off                             |
-| `SET_TEMP`       | `number`       | set AC temp (default 22; non-numeric ignored)|
-| `FAN_ON`         | –              | kitchen_fan → on                             |
-| `FAN_OFF`        | –              | kitchen_fan → off                            |
-| `FAN_SPEED`      | `0–5`          | set speed (clamped); 0 ⇒ off                 |
-| `LOCK_DOOR`      | –              | main_door → locked                           |
-| `UNLOCK_DOOR`    | –              | main_door → unlocked *(SAFETY — needs confirmation)* |
+| `SYSTEM_STATUS`  | –              | live CPU / memory / disk / battery summary   |
+| `CPU_USAGE`      | –              | CPU % and core count                         |
+| `MEMORY_USAGE`   | –              | RAM used/total/%                             |
+| `DISK_USAGE`     | –              | disk used/total/%                            |
+| `BATTERY_STATUS` | –              | battery % + charging (when present)          |
+| `LIST_PROCESSES` | –              | top-CPU processes table                      |
+| `KILL_PROCESS`   | `pid`          | terminate → force kill *(SAFETY)*            |
+| `OPEN_APP`       | `name`         | launch known app (notepad, calc, …) or PATH  |
+| `RUN_COMMAND`    | `cmd`          | run shell command (30 s cap) *(SAFETY)*      |
+| `FILE_LIST`      | `path`         | list a directory                             |
+| `OPEN_FILE`      | `path`         | open file/folder via `os.startfile`          |
 | `ADD_TASK`       | `name`         | append task (stripped; default "New Task")   |
-| `REMOVE_TASK`    | `name`         | remove task *(SAFETY — needs confirmation)*  |
-| `STATUS_REPORT`  | –              | speak full device + task summary             |
+| `REMOVE_TASK`    | `name`         | remove task *(SAFETY)*                       |
+| `STATUS_REPORT`  | –              | speak combined system + task summary         |
 | `WEATHER_REPORT` | –              | current weather for `LOCATION` (Open-Meteo)  |
-| `TV_ON` / `TV_OFF` | –           | living_room_tv → on / off                    |
-| `CURTAIN_OPEN` / `CURTAIN_CLOSE` | – | bedroom_curtains → open / closed        |
-| `HEATER_ON` / `HEATER_OFF` | –   | bathroom_heater → on / off                   |
-| `HEATER_TEMP`    | `0–50`          | set heater temp (clamped); 0 ⇒ off          |
-| `RESET_STATE`    | –              | restore all devices/tasks/timers to defaults |
+| `RESET_STATE`    | –              | restore all tasks/timers to defaults         |
 | `SET_TIMER`      | `seconds`      | schedule a timer (e.g. `SET_TIMER:90`)      |
 | `CANCEL_TIMER`   | `index`/`label`| cancel a pending timer                       |
 | `CHECK_TIMERS`   | –              | report pending timers with time remaining    |
 
-Example model output: `"Turning things on for you. [ACTION:LIGHT_ON][ACTION:AC_ON]"`
+Example model output: `"Your CPU is at 42%. [ACTION:CPU_USAGE]"`
 
 ---
 
@@ -303,12 +327,13 @@ Example model output: `"Turning things on for you. [ACTION:LIGHT_ON][ACTION:AC_O
 
 ## 9. Testing
 
-Run: `python -m unittest discover -s tests -v` (stdlib, no extra deps). **117 tests, all passing.**
-Frontend: `npm test` (vitest + Testing Library, 3 tests), `npm run lint` (tsc), `npm run build`.
+Run: `python -m unittest discover -s tests -v` (stdlib, no extra deps). **131 tests, all passing.**
+Frontend: `npm test` (vitest + Testing Library, 7 tests), `npm run lint` (tsc), `npm run build`.
 
 | File                  | # Tests | Covers                                                         |
 | --------------------- | ------- | -------------------------------------------------------------- |
-| `test_executive.py`   | 52      | every intent, clamping (incl. `SET_TEMP` 16–30), defaults, safety confirmation, timers + stale-fire pruning, weather provider, reset |
+| `test_executive.py`   | ~40     | every system intent, safety confirmation gate, timers + stale-fire pruning, weather provider, reset |
+| `test_system.py`      | ~10     | psutil metrics (incl. no-battery), process list/kill, app launch, command run, file browse/open |
 | `test_persistence.py` | 4       | save/reload, `--fresh`, missing file, corrupt file             |
 | `test_config.py`      | 11      | `validate_config` warnings (incl. retired model); `_env_bool`/`_env_int` parsing |
 | `test_nlp.py`         | 4       | manifest contents, intent key set, safety markers              |
@@ -316,7 +341,7 @@ Frontend: `npm test` (vitest + Testing Library, 3 tests), `npm run lint` (tsc), 
 | `test_session.py`     | 11      | `handle_input` / `run`, confirmation callback wiring           |
 | `test_peripherals.py` | 10      | STT engine routing (google/vosk/whisper), transcription parsing |
 | `test_weather.py`     | 5       | Open-Meteo geocode/forecast (mocked HTTP)                      |
-| `test_server.py`      | 10      | `/api/chat` + confirmation token flow, `/api/confirm`, `/api/state`, `/api/reset`, `/api/health` |
+| `test_server.py`      | ~13     | `/api/chat` + confirmation token flow, `/api/confirm`, `/api/state`, `/api/action`, `/api/files`, `/api/transcribe`, `/api/reset`, `/api/health` |
 
 Brain/Gemini live calls are **not** tested (need a real API key), but the transport is
 fully mocked in `test_brain.py` and `test_server.py`.
@@ -363,8 +388,8 @@ fully mocked in `test_brain.py` and `test_server.py`.
 - Windows UTF-8 console handling (`chcp 65001`). Tests grown to 103.
 
 **Round 5 — Model migration, correctness & platform hardening (v2.2.0):**
-- **Gemini migration**: default `MODEL_NAME` moved to `gemini-2.5-flash` (1.5 Flash is
-  retired and 404s); `validate_config` now warns on known-retired model names.
+- **Gemini migration**: default `MODEL_NAME` moved to `gemini-3.5-flash` (1.5/2.0/2.5-flash
+  are retired for new keys and 404); `validate_config` now warns on known-retired model names.
 - **Confirmation fix**: the web flow no longer re-runs the LLM on confirm — `/api/chat`
   returns a single-use `confirmationToken`, and `/api/confirm` executes the stored
   intents (no duplicate API call, no reply drift).
@@ -381,11 +406,31 @@ fully mocked in `test_brain.py` and `test_server.py`.
 - Docs updated across README / `project_README` / this document. Python tests: 117;
   frontend tests: 3.
 
+**Round 6 — Real system control & dashboard redesign (v2.3.0):**
+- **Full machine access**: new `keerthi/system.py` (psutil) replaces the simulated
+  smart home — live CPU/memory/disk/battery metrics, top-CPU process listing, process
+  termination, known-app launcher, arbitrary command runner, and a file browser.
+- **Reframed intents**: `COMMAND_INTENTS` now covers system status, process control,
+  app/command/file operations, plus the existing tasks/timers/weather; `SAFETY_INTENTS`
+  (`KILL_PROCESS`, `RUN_COMMAND`, `REMOVE_TASK`) require explicit confirmation.
+- **Web API growth**: `GET /api/files` (directory listing) and `POST /api/action`
+  (single-intent execution for the sidebar launcher, command runner, and file browser);
+  browser mic now sends raw 16 kHz PCM to `POST /api/transcribe` (backend STT).
+- **Dashboard redesign**: React frontend rebuilt around system gauges (CPU/RAM/Disk/
+  Battery), a process table with kill buttons, an app launcher, a command runner, and a
+  file browser, alongside chat, timers, and safety confirmations.
+- Docs reframed (README / `project_README` / this document). Python tests: 131;
+  frontend tests: 7.
+
 ---
 
 ## 11. Known Limitations / Future Work
 
-- **Simulated hardware only** — `executive.py` handlers are the IoT integration point.
+- **Real system control is powerful** — `KILL_PROCESS` / `RUN_COMMAND` / `OPEN_FILE`
+  act on the actual machine; all destructive intents are gated behind explicit
+  confirmation (CLI prompt or web confirm), and the browser UI mirrors that gate.
+- **`psutil` is the only new runtime dep** — a pure-Python wheel; add
+  `pip install psutil` (already in `requirements.txt`).
 - **Offline STT needs a model download** — `STT_ENGINE=vosk` needs a Vosk model
   (manual download); `STT_ENGINE=whisper` needs `pip install -r requirements-stt.txt`
   and downloads its model from Hugging Face on first use.

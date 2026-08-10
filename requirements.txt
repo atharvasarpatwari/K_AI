@@ -5,3 +5,4 @@ pyttsx3
 SpeechRecognition
 pyaudio
 requests
+psutil>=5.9
