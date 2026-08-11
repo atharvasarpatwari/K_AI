@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ButtonHTMLAttributes, CSSProperties, ReactNode } from 'react'
+import type { ButtonHTMLAttributes, ComponentPropsWithoutRef, CSSProperties, ReactNode } from 'react'
 import Markdown from 'react-markdown'
 import type { LucideIcon } from 'lucide-react'
 import {
   AppWindow,
   Bot,
+  Brain,
   Camera,
+  CalendarClock,
   CheckCircle2,
   Clock,
   Cpu,
@@ -70,6 +72,7 @@ type ApiState = {
   processes: ProcessInfo[]
   tasks: string[]
   timers: { label: string; due: number }[]
+  scheduled?: { id: string; command: string; at: number }[]
 }
 
 type ChatResponse = {
@@ -79,11 +82,17 @@ type ChatResponse = {
   needsConfirmation: boolean
   confirmationToken?: string
   pendingIntents?: string[]
+  screenshotUrl?: string
 }
 
 type Message = {
   role: 'user' | 'assistant' | 'system'
   content: string
+}
+
+type MemoryFact = {
+  text: string
+  time: number
 }
 
 const KNOWN_APPS = [
@@ -112,8 +121,39 @@ const SUGGESTIONS = [
   'Show me my open windows',
 ]
 
+const TTS_KEY = 'keerthi_tts'
+
+type SpeechRecognitionLike = {
+  lang: string
+  interimResults: boolean
+  continuous: boolean
+  start: () => void
+  stop: () => void
+  onresult: ((event: { results: { 0: { 0: { transcript: string } } } }) => void) | null
+  onerror: (() => void) | null
+  onend: (() => void) | null
+}
+
+function getSpeechRecognition(): new () => SpeechRecognitionLike | undefined {
+  if (typeof window === 'undefined') return undefined
+  const w = window as unknown as {
+    SpeechRecognition?: new () => SpeechRecognitionLike
+    webkitSpeechRecognition?: new () => SpeechRecognitionLike
+  }
+  return w.SpeechRecognition ?? w.webkitSpeechRecognition
+}
+
 function cleanReply(text: string): string {
   return text.replace(/\[ACTION:.*?\]/g, '').trim()
+}
+
+function filterStreaming(text: string): string {
+  const open = text.lastIndexOf('[')
+  const close = text.lastIndexOf(']')
+  if (open > close) {
+    return text.slice(0, open)
+  }
+  return text
 }
 
 function formatDuration(ms: number): string {
@@ -175,7 +215,7 @@ async function toPcm16(blob: Blob): Promise<ArrayBuffer> {
 }
 
 async function postChat(message: string, confirmed = false): Promise<ChatResponse> {
-  const res = await fetch('/api/chat', {
+  const res = await authFetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message, confirmed }),
@@ -187,7 +227,7 @@ async function postChat(message: string, confirmed = false): Promise<ChatRespons
 }
 
 async function postConfirm(token: string, confirmed: boolean): Promise<ChatResponse> {
-  const res = await fetch('/api/confirm', {
+  const res = await authFetch('/api/confirm', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ token, confirmed }),
@@ -199,7 +239,7 @@ async function postConfirm(token: string, confirmed: boolean): Promise<ChatRespo
 }
 
 async function postAction(intent: string, args: string[] = []): Promise<ChatResponse> {
-  const res = await fetch('/api/action', {
+  const res = await authFetch('/api/action', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ intent, args }),
@@ -211,11 +251,39 @@ async function postAction(intent: string, args: string[] = []): Promise<ChatResp
 }
 
 async function fetchState(): Promise<ApiState> {
-  const res = await fetch('/api/state')
+  const res = await authFetch('/api/state')
   if (!res.ok) {
     throw new Error(`Request failed with status ${res.status}`)
   }
   return res.json()
+}
+
+const TOKEN_KEY = 'keerthi_api_token'
+
+function getToken(): string {
+  return typeof window === 'undefined' ? '' : (localStorage.getItem(TOKEN_KEY) ?? '')
+}
+
+function authFetch(url: string, init?: RequestInit): Promise<Response> {
+  const token = getToken()
+  const headers = new Headers(init?.headers)
+  if (token) {
+    headers.set('X-API-Token', token)
+  }
+  return fetch(url, { ...init, headers })
+}
+
+function wsUrl(): string {
+  const base = `ws://${location.host}/api/ws`
+  const token = getToken()
+  return token ? `${base}?token=${encodeURIComponent(token)}` : base
+}
+
+function withToken(url: string): string {
+  const token = getToken()
+  if (!token) return url
+  const sep = url.includes('?') ? '&' : '?'
+  return `${url}${sep}token=${encodeURIComponent(token)}`
 }
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -255,6 +323,7 @@ const SECTION_TONES = {
   emerald: 'bg-emerald-500/10 text-emerald-300 ring-emerald-400/30',
   violet: 'bg-violet-500/10 text-violet-300 ring-violet-400/30',
   red: 'bg-red-500/10 text-red-300 ring-red-400/30',
+  sky: 'bg-sky-500/10 text-sky-300 ring-sky-400/30',
 } as const
 
 function SectionHeader({
@@ -438,7 +507,18 @@ function ChatBubble({ msg }: { msg: Message }) {
           </span>
         )}
         <div className="prose prose-invert max-w-none prose-p:my-1 prose-ul:my-1">
-          <Markdown>{msg.content}</Markdown>
+          <Markdown
+            components={{
+              img: ({ node: _node, ...rest }) => (
+                <img
+                  {...rest}
+                  className="my-2 max-h-80 rounded-xl border border-slate-700/80 shadow-lg shadow-black/30"
+                />
+              ),
+            }}
+          >
+            {msg.content}
+          </Markdown>
         </div>
       </div>
     </div>
@@ -475,7 +555,7 @@ function FileBrowser() {
     try {
       const params = new URLSearchParams()
       if (target) params.set('path', target)
-      const res = await fetch(`/api/files?${params}`)
+      const res = await authFetch(`/api/files?${params}`)
       if (!res.ok) throw new Error(String(res.status))
       const data = await res.json()
       setListing(data)
@@ -553,6 +633,7 @@ export default function App() {
   const [input, setInput] = useState('')
   const [state, setState] = useState<ApiState | null>(null)
   const [loading, setLoading] = useState(false)
+  const [streamingText, setStreamingText] = useState<string | null>(null)
   const [pendingToken, setPendingToken] = useState<string | null>(null)
   const [pendingIntents, setPendingIntents] = useState<string[]>([])
   const [wsConnected, setWsConnected] = useState(false)
@@ -566,11 +647,19 @@ export default function App() {
   const [brightness, setBrightness] = useState(80)
   const [screenshot, setScreenshot] = useState<string | null>(null)
   const [windows, setWindows] = useState<WindowInfo[]>([])
+  const [facts, setFacts] = useState<MemoryFact[]>([])
+  const [factInput, setFactInput] = useState('')
   const [sidebarOpen, setSidebarOpen] = useState(
     () => typeof window === 'undefined' || window.innerWidth >= 1024,
   )
   const recorderRef = useRef<MediaRecorder | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
+  const wsRef = useRef<WebSocket | null>(null)
+  const chatInFlightRef = useRef(false)
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
+  const [ttsEnabled, setTtsEnabled] = useState(
+    () => typeof window === 'undefined' || localStorage.getItem(TTS_KEY) !== 'off',
+  )
 
   useEffect(() => {
     fetchState().then(setState).catch(() => undefined)
@@ -590,7 +679,8 @@ export default function App() {
     let closed = false
 
     function connect() {
-      ws = new WebSocket(`ws://${location.host}/api/ws`)
+      ws = new WebSocket(wsUrl())
+      wsRef.current = ws
       ws.onopen = () => setWsConnected(true)
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data)
@@ -598,10 +688,26 @@ export default function App() {
           setState(data.state)
         } else if (data.type === 'timer') {
           setMessages((prev) => [...prev, { role: 'system', content: data.message }])
+        } else if (data.type === 'delta') {
+          setStreamingText((prev) => (prev ?? '') + data.text)
+        } else if (data.type === 'error') {
+          chatInFlightRef.current = false
+          setLoading(false)
+          setStreamingText(null)
+          pushError()
+        } else if (data.type === 'done') {
+          chatInFlightRef.current = false
+          finalizeStream(data)
         }
       }
       ws.onclose = () => {
         setWsConnected(false)
+        if (chatInFlightRef.current) {
+          chatInFlightRef.current = false
+          setLoading(false)
+          setStreamingText(null)
+          pushError()
+        }
         if (!closed) {
           setTimeout(connect, 3000)
         }
@@ -612,17 +718,19 @@ export default function App() {
     return () => {
       closed = true
       ws?.close()
+      wsRef.current = null
     }
   }, [])
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, loading])
+  }, [messages, loading, streamingText])
 
   function applyResult(result: ChatResponse) {
     const reply = cleanReply(result.reply)
     if (reply) {
       setMessages((prev) => [...prev, { role: 'assistant', content: reply }])
+      speak(reply)
     }
     if (result.actions.length > 0) {
       setMessages((prev) => [
@@ -635,6 +743,41 @@ export default function App() {
       setPendingToken(result.confirmationToken)
       setPendingIntents(result.pendingIntents ?? [])
     }
+    if (result.screenshotUrl) {
+      setScreenshot(withToken(result.screenshotUrl))
+      setMessages((prev) => [
+        ...prev,
+        { role: 'assistant', content: `\n\n![Screen capture](${withToken(result.screenshotUrl)})` },
+      ])
+    }
+  }
+
+  function finalizeStream(data: ChatResponse) {
+    const reply = cleanReply(data.reply)
+    if (reply) {
+      setMessages((prev) => [...prev, { role: 'assistant', content: reply }])
+      speak(reply)
+    }
+    if ((data.actions ?? []).length > 0) {
+      setMessages((prev) => [
+        ...prev,
+        { role: 'system', content: data.actions.join(' · ') },
+      ])
+    }
+    setState(data.state)
+    if (data.needsConfirmation && data.confirmationToken) {
+      setPendingToken(data.confirmationToken)
+      setPendingIntents(data.pendingIntents ?? [])
+    }
+    if (data.screenshotUrl) {
+      setScreenshot(withToken(data.screenshotUrl))
+      setMessages((prev) => [
+        ...prev,
+        { role: 'assistant', content: `\n\n![Screen capture](${withToken(data.screenshotUrl)})` },
+      ])
+    }
+    setStreamingText(null)
+    setLoading(false)
   }
 
   function pushError() {
@@ -644,6 +787,25 @@ export default function App() {
     ])
   }
 
+  function speak(text: string) {
+    if (!ttsEnabled || typeof window === 'undefined' || !window.speechSynthesis) return
+    window.speechSynthesis.cancel()
+    const utterance = new SpeechSynthesisUtterance(text)
+    utterance.rate = 1.05
+    window.speechSynthesis.speak(utterance)
+  }
+
+  function toggleTts() {
+    setTtsEnabled((prev) => {
+      const next = !prev
+      localStorage.setItem(TTS_KEY, next ? 'on' : 'off')
+      if (!next && typeof window !== 'undefined' && window.speechSynthesis) {
+        window.speechSynthesis.cancel()
+      }
+      return next
+    })
+  }
+
   async function sendMessage(message: string) {
     const text = message.trim()
     if (!text || loading) return
@@ -651,7 +813,15 @@ export default function App() {
     setInput('')
     setPendingToken(null)
     setPendingIntents([])
+    setStreamingText(null)
     setMessages((prev) => [...prev, { role: 'user', content: text }])
+
+    const ws = wsRef.current
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      chatInFlightRef.current = true
+      ws.send(JSON.stringify({ type: 'chat', message: text }))
+      return
+    }
 
     try {
       applyResult(await postChat(text))
@@ -698,7 +868,7 @@ export default function App() {
     setLoading(true)
     try {
       await postAction('TAKE_SCREENSHOT', [])
-      setScreenshot(`/api/screenshot?t=${Date.now()}`)
+      setScreenshot(withToken(`/api/screenshot?t=${Date.now()}`))
     } catch {
       pushError()
     } finally {
@@ -708,7 +878,7 @@ export default function App() {
 
   async function loadWindows() {
     try {
-      const res = await fetch('/api/windows')
+      const res = await authFetch('/api/windows')
       if (!res.ok) throw new Error(String(res.status))
       const data = await res.json()
       setWindows(data.windows ?? [])
@@ -721,17 +891,101 @@ export default function App() {
     loadWindows()
   }, [])
 
+  useEffect(() => {
+    authFetch('/api/memory')
+      .then((res) => (res.ok ? res.json() : { facts: [] }))
+      .then((data) => setFacts(data.facts ?? []))
+      .catch(() => setFacts([]))
+  }, [])
+
+  async function addFact() {
+    const text = factInput.trim()
+    if (!text) return
+    try {
+      const res = await authFetch('/api/memory', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      })
+      if (!res.ok) throw new Error(String(res.status))
+      const data = await res.json()
+      setFacts(data.facts ?? [])
+      setFactInput('')
+    } catch {
+      /* ignore transient memory failures */
+    }
+  }
+
+  async function removeFact(index: number) {
+    try {
+      const res = await authFetch('/api/memory/forget', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ index }),
+      })
+      if (!res.ok) throw new Error(String(res.status))
+      const data = await res.json()
+      setFacts(data.facts ?? [])
+    } catch {
+      /* ignore transient memory failures */
+    }
+  }
+
   function handleReset() {
-    fetch('/api/reset', { method: 'POST' })
+    authFetch('/api/reset', { method: 'POST' }).catch(() => undefined)
     setMessages([])
     setPendingToken(null)
     setPendingIntents([])
     fetchState().then(setState).catch(() => undefined)
   }
 
+  function handleSetToken() {
+    const next = window.prompt('KEERTHI API token (leave empty to clear)', getToken())
+    if (next === null) return
+    if (next.trim()) {
+      localStorage.setItem(TOKEN_KEY, next.trim())
+    } else {
+      localStorage.removeItem(TOKEN_KEY)
+    }
+    window.location.reload()
+  }
+
   function startListening() {
     if (listening) {
+      recognitionRef.current?.stop()
       recorderRef.current?.stop()
+      return
+    }
+    const SR = getSpeechRecognition()
+    if (SR) {
+      const recognition = new SR()
+      recognition.lang = 'en-US'
+      recognition.interimResults = false
+      recognition.continuous = false
+      recognition.onresult = (event) => {
+        const transcript = event.results[0][0].transcript
+        recognitionRef.current = null
+        setListening(false)
+        if (transcript.trim()) {
+          sendMessage(transcript)
+        }
+      }
+      recognition.onerror = () => {
+        recognitionRef.current = null
+        setListening(false)
+      }
+      recognition.onend = () => {
+        recognitionRef.current = null
+        setListening(false)
+      }
+      recognitionRef.current = recognition
+      setListening(true)
+      try {
+        recognition.start()
+      } catch {
+        recognitionRef.current = null
+        setListening(false)
+      }
       return
     }
     navigator.mediaDevices
@@ -750,7 +1004,7 @@ export default function App() {
           try {
             const blob = new Blob(chunks, { type: recorder.mimeType })
             const pcm = await toPcm16(blob)
-            const res = await fetch('/api/transcribe', {
+            const res = await authFetch('/api/transcribe', {
               method: 'POST',
               headers: { 'Content-Type': 'application/octet-stream' },
               body: pcm,
@@ -829,6 +1083,25 @@ export default function App() {
           <div className="ml-auto flex shrink-0 items-center gap-2">
             <Button
               variant="ghost"
+              onClick={toggleTts}
+              title={ttsEnabled ? 'Mute voice replies' : 'Enable voice replies'}
+              aria-label={ttsEnabled ? 'Mute voice replies' : 'Enable voice replies'}
+              className="px-3"
+            >
+              {ttsEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={handleSetToken}
+              title="Set API token"
+              aria-label="Set API token"
+              className="px-3"
+            >
+              <Lock className="h-4 w-4" />
+              <span className="hidden md:inline">Token</span>
+            </Button>
+            <Button
+              variant="ghost"
               onClick={handleReset}
               title="Clear conversation"
               aria-label="Reset conversation"
@@ -881,7 +1154,10 @@ export default function App() {
               </div>
             </div>
           )}
-          {loading && <TypingIndicator />}
+          {loading && streamingText !== null && (
+            <ChatBubble msg={{ role: 'assistant', content: filterStreaming(streamingText) }} />
+          )}
+          {loading && streamingText === null && <TypingIndicator />}
           <div ref={endRef} />
         </section>
 
@@ -1200,6 +1476,49 @@ export default function App() {
             </Card>
 
             <Card className="mb-4 p-3">
+              <SectionHeader icon={Brain} title="Memory" tone="violet" />
+              <div className="mb-2 flex gap-2">
+                <input
+                  value={factInput}
+                  onChange={(e) => setFactInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      addFact()
+                    }
+                  }}
+                  placeholder="Save a fact…"
+                  className="input min-w-0 flex-1"
+                />
+                <Button onClick={addFact} disabled={!factInput.trim()}>
+                  Save
+                </Button>
+              </div>
+              {facts.length === 0 ? (
+                <p className="text-sm text-slate-500">No saved facts yet.</p>
+              ) : (
+                <ul className="max-h-40 space-y-1 overflow-y-auto pr-0.5">
+                  {facts.map((fact, i) => (
+                    <li
+                      key={`${fact.text}-${i}`}
+                      className="group flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-slate-300 transition-colors hover:bg-slate-800/50"
+                    >
+                      <span className="min-w-0 flex-1">{fact.text}</span>
+                      <button
+                        type="button"
+                        onClick={() => removeFact(i)}
+                        title="Forget"
+                        aria-label="Forget fact"
+                        className="shrink-0 text-slate-500 transition-colors hover:text-red-400"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Card>
+
+            <Card className="mb-4 p-3">
               <SectionHeader icon={AppWindow} title="Windows" tone="violet" />
               <Button variant="soft" className="mb-2 w-full" onClick={loadWindows}>
                 Refresh windows
@@ -1290,6 +1609,27 @@ export default function App() {
                       </span>
                       <span className="shrink-0 font-mono text-xs text-amber-300">
                         {formatDuration(timer.due * 1000 - now)}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Card>
+
+            <Card className="mb-4 p-3">
+              <SectionHeader icon={CalendarClock} title="Scheduled" tone="sky" />
+              {state?.scheduled && state.scheduled.length === 0 ? (
+                <p className="text-sm text-slate-500">No scheduled tasks.</p>
+              ) : (
+                <ul className="space-y-1.5 text-sm">
+                  {state?.scheduled?.map((task) => (
+                    <li key={task.id} className="flex items-center justify-between gap-2">
+                      <span className="flex min-w-0 items-center gap-2 text-slate-300">
+                        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-sky-500 shadow-[0_0_6px_rgba(14,165,233,0.8)]" />
+                        <span className="truncate">{task.command}</span>
+                      </span>
+                      <span className="shrink-0 font-mono text-xs text-sky-300">
+                        {formatDuration(task.at * 1000 - now)}
                       </span>
                     </li>
                   ))}

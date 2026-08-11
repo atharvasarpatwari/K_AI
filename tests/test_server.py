@@ -2,8 +2,10 @@ import unittest
 from unittest import mock
 
 from fastapi.testclient import TestClient
+from starlette.testclient import WebSocketDenialResponse
 
 import keerthi.server as server
+from keerthi.config import CONFIG
 
 
 class TestServerEndpoints(unittest.TestCase):
@@ -36,12 +38,14 @@ class TestServerEndpoints(unittest.TestCase):
         server._officer = self.officer
         server._pending_confirmations.clear()
         server._clients.clear()
+        server._memory = None
         self.client = TestClient(server.app)
 
     def tearDown(self):
         server._brain = None
         server._officer = None
         server._controller = None
+        server._memory = None
         server._pending_confirmations.clear()
         server._clients.clear()
 
@@ -151,7 +155,7 @@ class TestServerEndpoints(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["status"], "ok")
-        self.assertEqual(payload["version"], "2.4.0")
+        self.assertEqual(payload["version"], "3.0.0")
         self.assertIn("apiKeyPresent", payload)
 
     def test_transcribe_audio(self):
@@ -222,6 +226,137 @@ class TestServerEndpoints(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.officer.set_vision_provider.assert_called_once()
+
+    def test_chat_includes_screenshot_url(self):
+        self.brain.generate_response.return_value = "Captured. [ACTION:TAKE_SCREENSHOT]"
+        response = self.client.post("/api/chat", json={"message": "screenshot"})
+        payload = response.json()
+        self.assertTrue(payload["screenshotUrl"].startswith("/api/screenshot?t="))
+        self.assertEqual(payload["actions"], ["Opened notepad."])
+
+    def test_chat_no_screenshot_url_without_capture(self):
+        self.brain.generate_response.return_value = "Done. [ACTION:OPEN_APP:notepad]"
+        response = self.client.post("/api/chat", json={"message": "open notepad"})
+        self.assertIsNone(response.json()["screenshotUrl"])
+
+    def test_ws_streams_chat_deltas_then_done(self):
+        self.brain.generate_response_stream.return_value = iter(
+            ["Hello", " there", " [ACTION:OPEN_APP:notepad]"]
+        )
+        self.officer.parse_and_execute.return_value = ["Opened notepad."]
+        with self.client.websocket_connect("/api/ws") as ws:
+            self.assertEqual(ws.receive_json()["type"], "state")
+            ws.send_json({"type": "chat", "message": "hi"})
+            got = []
+            for _ in range(3):
+                msg = ws.receive_json()
+                self.assertEqual(msg["type"], "delta")
+                got.append(msg["text"])
+            done = ws.receive_json()
+            self.assertEqual(done["type"], "done")
+            self.assertEqual("".join(got), "Hello there [ACTION:OPEN_APP:notepad]")
+            self.assertEqual(done["reply"], "Hello there [ACTION:OPEN_APP:notepad]")
+            self.assertEqual(done["actions"], ["Opened notepad."])
+            self.assertFalse(done["needsConfirmation"])
+            self.brain.generate_response_stream.assert_called_once_with("hi")
+
+    def test_ws_ignores_non_chat_frames(self):
+        with self.client.websocket_connect("/api/ws") as ws:
+            self.assertEqual(ws.receive_json()["type"], "state")
+            ws.send_text("not json")
+            ws.send_json({"type": "ping"})
+            ws.send_json({"type": "chat", "message": ""})
+            self.brain.generate_response_stream.assert_not_called()
+
+    def test_token_required_returns_401_without_it(self):
+        with mock.patch.dict(CONFIG, {"KEERTHI_API_TOKEN": "secret"}):
+            response = self.client.get("/api/state")
+        self.assertEqual(response.status_code, 401)
+
+    def test_token_accepted_via_header(self):
+        with mock.patch.dict(CONFIG, {"KEERTHI_API_TOKEN": "secret"}):
+            response = self.client.get(
+                "/api/state", headers={"X-API-Token": "secret"}
+            )
+        self.assertEqual(response.status_code, 200)
+
+    def test_token_accepted_via_query_param(self):
+        with mock.patch.dict(CONFIG, {"KEERTHI_API_TOKEN": "secret"}):
+            response = self.client.get("/api/state?token=secret")
+        self.assertEqual(response.status_code, 200)
+
+    def test_ws_rejects_without_token_when_required(self):
+        with (
+            mock.patch.dict(CONFIG, {"KEERTHI_API_TOKEN": "secret"}),
+            self.assertRaises(WebSocketDenialResponse) as ctx,
+            self.client.websocket_connect("/api/ws") as ws,
+        ):
+            ws.receive_json()
+        self.assertEqual(ctx.exception.status_code, 401)
+
+    def test_ws_accepts_token_via_query_param(self):
+        with mock.patch.dict(
+            CONFIG, {"KEERTHI_API_TOKEN": "secret"}
+        ), self.client.websocket_connect("/api/ws?token=secret") as ws:
+            self.assertEqual(ws.receive_json()["type"], "state")
+
+    def test_chat_degraded_without_api_key(self):
+        with mock.patch.dict(CONFIG, {"GEMINI_API_KEY": ""}):
+            response = self.client.post("/api/chat", json={"message": "hi"})
+        payload = response.json()
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("without a Gemini API key", payload["reply"])
+        self.brain.generate_response.assert_not_called()
+
+    def test_memory_list_remember_forget(self):
+        import tempfile
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(CONFIG, {"MEMORY_FILE": f"{tmp}/memory.json"}),
+        ):
+            server._memory = None
+            empty = self.client.get("/api/memory").json()
+            self.assertEqual(empty, {"facts": []})
+
+            saved = self.client.post(
+                "/api/memory", json={"text": "Likes coffee"}
+            ).json()
+            self.assertTrue(saved["ok"])
+            self.assertEqual(len(saved["facts"]), 1)
+            self.assertEqual(saved["facts"][0]["text"], "Likes coffee")
+
+            dup = self.client.post(
+                "/api/memory", json={"text": "likes coffee"}
+            ).json()
+            self.assertFalse(dup["ok"])
+            self.assertEqual(len(dup["facts"]), 1)
+
+            forgotten = self.client.post(
+                "/api/memory/forget", json={"index": 0}
+            ).json()
+            self.assertTrue(forgotten["ok"])
+            self.assertEqual(forgotten["facts"], [])
+        server._memory = None
+
+    def test_chat_save_fact_refreshes_system_prompt(self):
+        self.brain.generate_response.return_value = (
+            "Got it. [ACTION:SAVE_FACT:user likes pizza]"
+        )
+        self.officer.parse_and_execute.return_value = ["Saved."]
+        response = self.client.post("/api/chat", json={"message": "remember I like pizza"})
+        self.assertEqual(response.status_code, 200)
+        self.brain.refresh_system_prompt.assert_called_once()
+
+    def test_health_includes_reliability_metrics(self):
+        response = self.client.get("/api/health")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertIn("uptime", payload)
+        self.assertIn("tokenRequired", payload)
+        self.assertIn("pendingConfirmations", payload)
+        self.assertIn("historyMessages", payload)
+        self.assertIsInstance(payload["uptime"], float)
 
 
 if __name__ == "__main__":

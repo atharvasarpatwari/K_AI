@@ -97,6 +97,14 @@ class FakeWin32Gui:
     def PostMessage(self, hwnd: int, msg: int, *_args) -> None:
         self.calls.append(("post", hwnd, msg))
 
+    def GetWindowRect(self, _hwnd: int) -> tuple[int, int, int, int]:
+        return (0, 0, 400, 300)
+
+    def SetWindowPos(
+        self, hwnd: int, _after: int, x: int, y: int, w: int, h: int, flags: int
+    ) -> None:
+        self.calls.append(("setpos", hwnd, x, y, w, h, flags))
+
 
 class FakeWin32Con:
     SW_RESTORE = 9
@@ -360,6 +368,98 @@ class TestWindowManagement(unittest.TestCase):
             result = system.close_window("notepad")
         self.assertIn("Closing", result)
         self.assertEqual(gui.calls[0], ("post", 10, 0x0010))
+
+    def test_move_window_with_size(self):
+        patch, gui = self._patch_win32()
+        with patch:
+            result = system.move_window("notepad", 100, 100, 800, 600)
+        self.assertIn("Moved", result)
+        self.assertEqual(gui.calls[0], ("setpos", 10, 100, 100, 800, 600, 0x0040))
+
+    def test_move_window_keeps_current_size(self):
+        patch, gui = self._patch_win32()
+        with patch:
+            result = system.move_window("notepad", 5, 6)
+        self.assertIn("Moved", result)
+        self.assertEqual(gui.calls[0], ("setpos", 10, 5, 6, 400, 300, 0x0040))
+
+    def test_move_window_not_found(self):
+        with self._patch_win32()[0]:
+            result = system.move_window("safari", 0, 0)
+        self.assertIn("No open window", result)
+
+    def test_move_window_to_monitor(self):
+        monitors = [
+            {"index": 0, "left": 0, "top": 0, "width": 1920, "height": 1080, "primary": True},
+            {"index": 1, "left": 1920, "top": 0, "width": 1280, "height": 1024, "primary": False},
+        ]
+        patch, gui = self._patch_win32()
+        with patch, mock.patch("keerthi.system.list_monitors", return_value=monitors):
+            result = system.move_window_to_monitor("notepad", 1)
+        self.assertIn("monitor 1", result)
+        self.assertEqual(
+            gui.calls[0],
+            ("setpos", 10, 1920 + (1280 - 400) // 2, (1024 - 300) // 2, 400, 300, 0x0040),
+        )
+
+    def test_move_window_to_monitor_bad_index(self):
+        monitors = [
+            {
+                "index": 0,
+                "left": 0,
+                "top": 0,
+                "width": 1920,
+                "height": 1080,
+                "primary": True,
+            }
+        ]
+        with self._patch_win32()[0], mock.patch(
+            "keerthi.system.list_monitors", return_value=monitors
+        ):
+            result = system.move_window_to_monitor("notepad", 3)
+        self.assertIn("No monitor at index 3", result)
+
+    def test_list_monitors_non_windows(self):
+        with mock.patch("keerthi.system.os.name", "posix"):
+            self.assertEqual(system.list_monitors(), [])
+
+
+class TestInstallApp(unittest.TestCase):
+    def test_install_app_success(self):
+        completed = mock.MagicMock(returncode=0, stdout="Successfully installed", stderr="")
+        with mock.patch("keerthi.system.os.name", "nt"), mock.patch(
+            "keerthi.system.subprocess.run", return_value=completed
+        ) as run:
+            result = system.install_app("7zip")
+        self.assertIn("Installed 7zip", result)
+        command = run.call_args.args[0]
+        self.assertEqual(command[0], "winget")
+        self.assertIn("--accept-package-agreements", command)
+
+    def test_install_app_failure(self):
+        completed = mock.MagicMock(returncode=1, stdout="", stderr="No package found")
+        with mock.patch("keerthi.system.os.name", "nt"), mock.patch(
+            "keerthi.system.subprocess.run", return_value=completed
+        ):
+            result = system.install_app("nope")
+        self.assertIn("Could not install 'nope'", result)
+
+    def test_install_app_non_windows(self):
+        with mock.patch("keerthi.system.os.name", "posix"):
+            self.assertEqual(
+                system.install_app("7zip"),
+                "Installing apps is only supported on Windows.",
+            )
+
+    def test_install_app_winget_missing(self):
+        with mock.patch("keerthi.system.os.name", "nt"), mock.patch(
+            "keerthi.system.subprocess.run", side_effect=FileNotFoundError
+        ):
+            result = system.install_app("7zip")
+        self.assertIn("winget is not available", result)
+
+    def test_install_app_empty(self):
+        self.assertEqual(system.install_app("  "), "No app name given to install.")
 
 
 class TestBrowser(unittest.TestCase):

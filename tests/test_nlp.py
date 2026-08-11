@@ -57,6 +57,19 @@ class TestNlpManifest(unittest.TestCase):
                 "CLOSE_WINDOW",
                 "OPEN_URL",
                 "WEB_SEARCH",
+                "SAVE_FACT",
+                "LIST_FACTS",
+                "MACRO_RECORD",
+                "MACRO_STOP",
+                "MACRO_REPLAY",
+                "MACRO_LIST",
+                "MACRO_DELETE",
+                "SCHEDULE_TASK",
+                "CANCEL_SCHEDULED",
+                "LIST_SCHEDULED",
+                "INSTALL_APP",
+                "MOVE_WINDOW",
+                "MOVE_WINDOW_TO_MONITOR",
             },
         )
 
@@ -70,6 +83,10 @@ class TestNlpManifest(unittest.TestCase):
         self.assertIn("[ACTION:CLOSE_WINDOW] [SAFETY]", manifest)
         self.assertNotIn("[ACTION:TAKE_SCREENSHOT] [SAFETY]", manifest)
         self.assertNotIn("[ACTION:OPEN_URL] [SAFETY]", manifest)
+        self.assertIn("[ACTION:MACRO_REPLAY] [SAFETY]", manifest)
+        self.assertNotIn("[ACTION:MACRO_LIST] [SAFETY]", manifest)
+        self.assertIn("[ACTION:SCHEDULE_TASK] [SAFETY]", manifest)
+        self.assertIn("[ACTION:INSTALL_APP] [SAFETY]", manifest)
         self.assertIn("confirm", manifest)
 
 

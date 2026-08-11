@@ -9,11 +9,24 @@ State lives in-process (module singletons), so run a single worker:
 """
 
 import asyncio
+import json
+import logging
+import threading
+import time
 import uuid
 from contextlib import suppress
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import (
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -25,13 +38,33 @@ from keerthi.executive import (
     ExecutiveOfficer,
     extract_intents,
 )
+from keerthi.logsetup import setup_file_logging
+from keerthi.memory import MemoryStore
 from keerthi.peripherals import PeripheralController
 
-app = FastAPI(title="KEERTHI API", version="2.4.0")
+logger = logging.getLogger(__name__)
+
+
+def _is_authorized(token: str | None) -> bool:
+    expected = CONFIG["KEERTHI_API_TOKEN"]
+    return not expected or bool(token) and token == expected
+
+
+async def require_token(
+    x_api_token: str | None = Header(default=None),
+    token: str | None = Query(default=None),
+) -> None:
+    """Optional bearer-style auth: only enforced when KEERTHI_API_TOKEN is set."""
+    if not _is_authorized(x_api_token or token):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+app = FastAPI(title="KEERTHI API", version="3.0.0", dependencies=[Depends(require_token)])
 
 _brain: KeerthiBrain | None = None
 _officer: ExecutiveOfficer | None = None
 _controller: PeripheralController | None = None
+_memory: MemoryStore | None = None
 _loop: asyncio.AbstractEventLoop | None = None
 
 # Single-use confirmation tokens for pending safety-critical actions.
@@ -39,6 +72,13 @@ _pending_confirmations: dict[str, dict[str, Any]] = {}
 
 # Connected WebSocket clients awaiting live state / timer pushes.
 _clients: set[WebSocket] = set()
+
+_started_at = time.monotonic()
+
+_DEGRADED_REPLY = (
+    "KEERTHI is running without a Gemini API key. "
+    "Add GEMINI_API_KEY to your environment or .env file and restart to enable chat."
+)
 
 
 def get_brain() -> KeerthiBrain:
@@ -61,6 +101,13 @@ def get_controller() -> PeripheralController:
     if _controller is None:
         _controller = PeripheralController()
     return _controller
+
+
+def get_memory() -> MemoryStore:
+    global _memory
+    if _memory is None:
+        _memory = MemoryStore()
+    return _memory
 
 
 async def _send_events(events: list[dict[str, Any]]) -> None:
@@ -96,6 +143,55 @@ def _push_state() -> None:
     _schedule([{"type": "state", "state": get_officer().get_summary()}])
 
 
+def _screenshot_url(intents: list[str]) -> str | None:
+    """Returns a fresh screenshot URL if the reply captured/described the screen."""
+    if any(i in ("TAKE_SCREENSHOT", "READ_SCREEN") for i in intents):
+        return f"/api/screenshot?t={int(time.time() * 1000)}"
+    return None
+
+
+def _extract_and_execute(
+    reply: str, confirmed: bool
+) -> dict[str, Any]:
+    """Extracts intents from a reply, running safety gating + execution.
+
+    Mirrors the POST /api/chat pipeline so the WebSocket path shares it.
+    Returns the response payload minus `reply`.
+    """
+    officer = get_officer()
+    intents = extract_intents(reply)
+    safety = [i for i in intents if i in SAFETY_INTENTS]
+
+    if safety and not confirmed:
+        token = uuid.uuid4().hex
+        _pending_confirmations[token] = {
+            "reply": reply,
+            "intents": intents,
+        }
+        return {
+            "actions": [],
+            "state": officer.get_summary(),
+            "needsConfirmation": True,
+            "confirmationToken": token,
+            "pendingIntents": safety,
+            "screenshotUrl": None,
+        }
+
+    actions = officer.parse_and_execute(reply, confirm=lambda _: confirmed)
+    if any(i == "SAVE_FACT" for i in intents):
+        with suppress(ValueError):
+            get_brain().refresh_system_prompt()
+    _push_state()
+    return {
+        "actions": actions,
+        "state": officer.get_summary(),
+        "needsConfirmation": False,
+        "confirmationToken": None,
+        "pendingIntents": [],
+        "screenshotUrl": _screenshot_url(intents),
+    }
+
+
 class ChatRequest(BaseModel):
     message: str
     confirmed: bool = False
@@ -111,6 +207,14 @@ class ActionRequest(BaseModel):
     args: list[str] = []
 
 
+class MemoryRequest(BaseModel):
+    text: str = ""
+
+
+class MemoryIndexRequest(BaseModel):
+    index: int = 0
+
+
 class ChatResponse(BaseModel):
     reply: str
     actions: list[str]
@@ -118,15 +222,21 @@ class ChatResponse(BaseModel):
     needsConfirmation: bool
     confirmationToken: str | None = None
     pendingIntents: list[str] = []
+    screenshotUrl: str | None = None
 
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
-    """Readiness probe for CI and load balancers."""
+    """Readiness probe for CI, load balancers, and the dashboard."""
+    history_len = len(_brain.history) if _brain is not None else 0
     return {
         "status": "ok",
         "version": app.version,
         "apiKeyPresent": bool(CONFIG["GEMINI_API_KEY"]),
+        "tokenRequired": bool(CONFIG["KEERTHI_API_TOKEN"]),
+        "uptime": round(time.monotonic() - _started_at, 1),
+        "pendingConfirmations": len(_pending_confirmations),
+        "historyMessages": history_len,
     }
 
 
@@ -146,39 +256,20 @@ def reset_conversation() -> dict[str, bool]:
 @app.post("/api/chat")
 def chat(request: ChatRequest) -> ChatResponse:
     """Processes one user message through the brain and executive."""
-    brain = get_brain()
     officer = get_officer()
+    if not CONFIG["GEMINI_API_KEY"]:
+        return ChatResponse(
+            reply=_DEGRADED_REPLY,
+            actions=[],
+            state=officer.get_summary(),
+            needsConfirmation=False,
+        )
+    brain = get_brain()
     officer.set_vision_provider(brain.describe_image)
 
     reply = brain.generate_response(request.message)
-    intents = extract_intents(reply)
-    safety = [i for i in intents if i in SAFETY_INTENTS]
-
-    needs_confirmation = bool(safety) and not request.confirmed
-    if needs_confirmation:
-        token = uuid.uuid4().hex
-        _pending_confirmations[token] = {
-            "reply": reply,
-            "intents": intents,
-            "message": request.message,
-        }
-        return ChatResponse(
-            reply=reply,
-            actions=[],
-            state=officer.get_summary(),
-            needsConfirmation=True,
-            confirmationToken=token,
-            pendingIntents=safety,
-        )
-
-    actions = officer.parse_and_execute(reply, confirm=lambda _: request.confirmed)
-    _push_state()
-    return ChatResponse(
-        reply=reply,
-        actions=actions,
-        state=officer.get_summary(),
-        needsConfirmation=False,
-    )
+    result = _extract_and_execute(reply, request.confirmed)
+    return ChatResponse(reply=reply, **result)
 
 
 @app.post("/api/confirm")
@@ -197,14 +288,8 @@ def confirm(request: ConfirmRequest) -> ChatResponse:
             needsConfirmation=False,
         )
 
-    actions = officer.parse_and_execute(pending["reply"], confirm=lambda _: True)
-    _push_state()
-    return ChatResponse(
-        reply=pending["reply"],
-        actions=actions,
-        state=officer.get_summary(),
-        needsConfirmation=False,
-    )
+    result = _extract_and_execute(pending["reply"], True)
+    return ChatResponse(reply=pending["reply"], **result)
 
 
 @app.post("/api/action")
@@ -244,6 +329,26 @@ def run_action(request: ActionRequest) -> ChatResponse:
         state=officer.get_summary(),
         needsConfirmation=False,
     )
+
+
+@app.get("/api/memory")
+def list_memory() -> dict[str, Any]:
+    """Returns the saved long-term memory facts."""
+    return {"facts": get_memory().all()}
+
+
+@app.post("/api/memory")
+def remember_fact(request: MemoryRequest) -> dict[str, Any]:
+    """Adds a fact to long-term memory."""
+    ok = get_memory().remember(request.text)
+    return {"ok": ok, "facts": get_memory().all()}
+
+
+@app.post("/api/memory/forget")
+def forget_fact(request: MemoryIndexRequest) -> dict[str, Any]:
+    """Removes a fact by index."""
+    ok = get_memory().forget(request.index)
+    return {"ok": ok, "facts": get_memory().all()}
 
 
 @app.get("/api/files")
@@ -289,23 +394,79 @@ async def transcribe_audio(request: Request) -> dict[str, str]:
 
 @app.websocket("/api/ws")
 async def ws_state(websocket: WebSocket) -> None:
-    """Streams live state snapshots and timer-expiry events to the dashboard."""
+    """Streams live state, timer events, and token-by-token chat replies."""
     await websocket.accept()
+    if not _is_authorized(websocket.query_params.get("token")):
+        await websocket.close(code=1008, reason="Unauthorized")
+        return
     _clients.add(websocket)
+    officer = get_officer()
+    with suppress(ValueError):
+        officer.set_vision_provider(get_brain().describe_image)
     try:
-        await websocket.send_json({"type": "state", "state": get_officer().get_summary()})
+        await websocket.send_json({"type": "state", "state": officer.get_summary()})
         while True:
-            await websocket.receive_text()
+            raw = await websocket.receive_text()
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if data.get("type") != "chat" or not data.get("message"):
+                continue
+            if not CONFIG["GEMINI_API_KEY"]:
+                await websocket.send_json({"type": "error", "message": _DEGRADED_REPLY})
+                continue
+            await _handle_chat_stream(websocket, officer, str(data["message"]))
     except WebSocketDisconnect:
         pass
     finally:
         _clients.discard(websocket)
 
 
+async def _handle_chat_stream(
+    websocket: WebSocket, officer: ExecutiveOfficer, message: str
+) -> None:
+    """Runs a brain stream in a worker thread, relaying deltas to the socket."""
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+    outcome: dict[str, Any] = {}
+
+    def _run() -> None:
+        parts: list[str] = []
+        try:
+            for delta in get_brain().generate_response_stream(message):
+                parts.append(delta)
+                loop.call_soon_threadsafe(queue.put_nowait, delta)
+            outcome["reply"] = "".join(parts)
+        except Exception:
+            outcome["error"] = True
+            logger.exception("Gemini stream call failed")
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+    while True:
+        delta = await queue.get()
+        if delta is None:
+            break
+        await websocket.send_json({"type": "delta", "text": delta})
+
+    if outcome.get("error"):
+        await websocket.send_json(
+            {"type": "error", "message": "Streaming failed. Please try that again."}
+        )
+        return
+
+    result = _extract_and_execute(outcome.get("reply", ""), False)
+    await websocket.send_json({"type": "done", "reply": outcome.get("reply", ""), **result})
+
+
 @app.on_event("startup")
 async def _startup() -> None:
     global _loop
     _loop = asyncio.get_running_loop()
+    setup_file_logging()
 
 
 @app.on_event("shutdown")

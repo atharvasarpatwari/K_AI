@@ -51,12 +51,21 @@ class ConfigDict(TypedDict):
     LOG_LEVEL: str
     STATE_FILE: str
     SCREENSHOT_DIR: str
+    MACRO_FILE: str
+    DASHBOARD_URL: str
+    KEERTHI_API_TOKEN: str | None
+    LOG_FILE: str
+    MEMORY_FILE: str
+    USE_FUNCTION_CALLING: bool
+    GEMINI_MAX_RETRIES: int
+    GEMINI_RETRY_BASE_DELAY: float
+    GEMINI_RETRY_MAX_DELAY: float
 
 
 CONFIG: ConfigDict = {
     "NAME": "KEERTHI",
     "FULL_NAME": "Knowledge-Enhanced Engine for Real-Time Human Intelligence",
-    "VERSION": "2.4.0",
+    "VERSION": "3.0.0",
     "USER_NAME": "Atharva",
     "LOCATION": "Hyderabad, India",
     "GEMINI_API_KEY": os.getenv("GEMINI_API_KEY"),
@@ -76,6 +85,15 @@ CONFIG: ConfigDict = {
     "LOG_LEVEL": os.getenv("LOG_LEVEL", "INFO").upper(),
     "STATE_FILE": os.getenv("STATE_FILE", "keerthi_state.json"),
     "SCREENSHOT_DIR": os.getenv("SCREENSHOT_DIR", "screenshots"),
+    "MACRO_FILE": os.getenv("MACRO_FILE", "keerthi_macros.json"),
+    "DASHBOARD_URL": os.getenv("DASHBOARD_URL", "http://localhost:8000"),
+    "KEERTHI_API_TOKEN": os.getenv("KEERTHI_API_TOKEN"),
+    "LOG_FILE": os.getenv("LOG_FILE", "keerthi.log"),
+    "MEMORY_FILE": os.getenv("MEMORY_FILE", "keerthi_memory.json"),
+    "USE_FUNCTION_CALLING": _env_bool("USE_FUNCTION_CALLING", False),
+    "GEMINI_MAX_RETRIES": _env_int("GEMINI_MAX_RETRIES", 3),
+    "GEMINI_RETRY_BASE_DELAY": _env_float("GEMINI_RETRY_BASE_DELAY", 1.0),
+    "GEMINI_RETRY_MAX_DELAY": _env_float("GEMINI_RETRY_MAX_DELAY", 8.0),
 }
 
 # Initial state for tasks and timers (system metrics are always live)
@@ -85,7 +103,8 @@ INITIAL_STATE = {
         "Call the dentist",
         "Water the indoor plants"
     ],
-    "timers": []
+    "timers": [],
+    "scheduled": []
 }
 
 _VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
@@ -151,6 +170,13 @@ def validate_config() -> None:
     if CONFIG["MAX_HISTORY_TURNS"] <= 0:
         warnings.warn(
             "MAX_HISTORY_TURNS must be positive.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    if CONFIG["GEMINI_MAX_RETRIES"] < 0:
+        warnings.warn(
+            "GEMINI_MAX_RETRIES must be >= 0.",
             RuntimeWarning,
             stacklevel=2,
         )

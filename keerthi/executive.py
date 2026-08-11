@@ -35,6 +35,7 @@ class ExecutiveOfficer:
             self._load_state()
         self.state.setdefault("tasks", [])
         self.state.setdefault("timers", [])
+        self.state.setdefault("scheduled", [])
         self._prune_stale_timers()
         self._lock = threading.RLock()
         self._notifier: Callable[[str], None] | None = None
@@ -42,6 +43,10 @@ class ExecutiveOfficer:
         self._thread: threading.Thread | None = None
         self._weather_provider: Callable[[str], str] | None = None
         self._vision_provider: Callable[[str], str] | None = None
+        self._memory: Any | None = None
+        self._macros: Any | None = None
+        self._recorder: Any | None = None
+        self._recording_name: str | None = None
         self._handlers: dict[str, Callable[[list[str]], str | None]] = {
             "SYSTEM_STATUS": self._system_status,
             "CPU_USAGE": self._cpu_usage,
@@ -83,6 +88,19 @@ class ExecutiveOfficer:
             "CLOSE_WINDOW": self._close_window,
             "OPEN_URL": self._open_url,
             "WEB_SEARCH": self._web_search,
+            "SAVE_FACT": self._save_fact,
+            "LIST_FACTS": self._list_facts,
+            "MACRO_RECORD": self._record_macro,
+            "MACRO_STOP": self._stop_macro,
+            "MACRO_REPLAY": self._replay_macro,
+            "MACRO_LIST": self._list_macros,
+            "MACRO_DELETE": self._delete_macro,
+            "SCHEDULE_TASK": self._schedule_task,
+            "CANCEL_SCHEDULED": self._cancel_scheduled,
+            "LIST_SCHEDULED": self._list_scheduled,
+            "INSTALL_APP": self._install_app,
+            "MOVE_WINDOW": self._move_window,
+            "MOVE_WINDOW_TO_MONITOR": self._move_window_to_monitor,
         }
 
     def parse_and_execute(
@@ -342,6 +360,180 @@ class ExecutiveOfficer:
             return "Please provide a search query."
         return system.web_search(query)
 
+    # ---- Memory ----
+
+    def _memory_store(self) -> Any:
+        if self._memory is None:
+            from keerthi.memory import MemoryStore
+
+            self._memory = MemoryStore()
+        return self._memory
+
+    def _save_fact(self, args: list[str]) -> str:
+        text = _join_args(args).strip()
+        if not text:
+            return "No fact text given."
+        if self._memory_store().remember(text):
+            return f"Fact remembered: {text}"
+        return "That fact is already saved."
+
+    def _list_facts(self, args: list[str]) -> str:
+        facts = self._memory_store().all()
+        if not facts:
+            return "No saved facts yet."
+        return "Saved facts: " + "; ".join(str(f["text"]) for f in facts) + "."
+
+    # ---- Macros ----
+
+    def _macro_store(self) -> Any:
+        if self._macros is None:
+            from keerthi.macros import MacroStore
+
+            self._macros = MacroStore()
+        return self._macros
+
+    def _record_macro(self, args: list[str]) -> str:
+        name = _join_args(args).strip()
+        if not name:
+            return "Please name the macro to record (e.g. MACRO_RECORD:demo)."
+        if self._recorder is not None:
+            return f"Already recording macro '{self._recording_name}'."
+        from keerthi.macros import MacroRecorder
+
+        recorder = MacroRecorder()
+        if not recorder.start():
+            return "Macro recording requires pynput (pip install pynput)."
+        self._recorder = recorder
+        self._recording_name = name
+        return f"Recording macro '{name}' — say 'stop macro' when done."
+
+    def _stop_macro(self, args: list[str]) -> str:
+        if self._recorder is None or self._recording_name is None:
+            return "No macro recording is in progress."
+        name = self._recording_name
+        events = self._recorder.stop()
+        self._recorder = None
+        self._recording_name = None
+        if not self._macro_store().save(name, events):
+            return f"Could not save macro '{name}' — no input was captured."
+        return f"Macro '{name}' saved ({len(events)} events)."
+
+    def _replay_macro(self, args: list[str]) -> str:
+        name = _join_args(args).strip()
+        if not name:
+            return "Please name the macro to replay (e.g. MACRO_REPLAY:demo)."
+        events = self._macro_store().load(name)
+        if events is None:
+            return f"No macro named '{name}'."
+        from keerthi.macros import replay_events
+
+        performed = replay_events(events)
+        return f"Replayed macro '{name}' ({performed} events)."
+
+    def _list_macros(self, args: list[str]) -> str:
+        names = self._macro_store().list()
+        if not names:
+            return "No macros recorded yet."
+        return "Recorded macros: " + ", ".join(names) + "."
+
+    def _delete_macro(self, args: list[str]) -> str:
+        name = _join_args(args).strip()
+        if not name:
+            return "Please name the macro to delete."
+        if self._macro_store().delete(name):
+            return f"Deleted macro '{name}'."
+        return f"No macro named '{name}'."
+
+    # ---- Scheduled tasks ----
+
+    def _schedule_task(self, args: list[str]) -> str:
+        parsed = _parse_schedule(args)
+        if parsed is None:
+            return (
+                "I couldn't parse that schedule. Use SCHEDULE_TASK:command:HH:MM "
+                "or SCHEDULE_TASK:command:in:N:minutes."
+            )
+        command, at = parsed
+        with self._lock:
+            index = len(self.state["scheduled"])
+            self.state["scheduled"].append(
+                {
+                    "id": f"scheduled-{int(time.time())}-{index}",
+                    "command": command,
+                    "at": float(at),
+                }
+            )
+        self._save_state()
+        when = _format_duration(max(1, int(at - time.time())))
+        return f"Scheduled '{command}' to run in {when}. ({index})"
+
+    def _cancel_scheduled(self, args: list[str]) -> str:
+        index = _first_int(args)
+        if index is None:
+            return "Please provide the index of the scheduled task to cancel."
+        with self._lock:
+            tasks = self.state["scheduled"]
+            if 0 <= index < len(tasks):
+                command = tasks.pop(index)["command"]
+                self._save_state()
+                return f"Cancelled scheduled task {index} ('{command}')."
+        return f"No scheduled task at index {index}."
+
+    def _list_scheduled(self, args: list[str]) -> str:
+        with self._lock:
+            tasks = list(self.state["scheduled"])
+        if not tasks:
+            return "No scheduled tasks."
+        now = time.time()
+        parts = [
+            f"{i}: {t['command']} (in {_format_duration(max(1, int(t['at'] - now)))})"
+            for i, t in enumerate(tasks)
+        ]
+        return "Scheduled tasks: " + "; ".join(parts) + "."
+
+    def _fire_due_scheduled(self) -> list[str]:
+        """Runs commands whose scheduled time has arrived; removes them."""
+        now = time.time()
+        with self._lock:
+            due = [t for t in self.state["scheduled"] if t["at"] <= now]
+            self.state["scheduled"] = [t for t in self.state["scheduled"] if t["at"] > now]
+        if not due:
+            return []
+        self._save_state()
+        messages: list[str] = []
+        for task in due:
+            result = system.run_command(task["command"])
+            messages.append(
+                f"Scheduled task '{task['command']}' ran: {result}"
+            )
+        return messages
+
+    # ---- Software & windows ----
+
+    def _install_app(self, args: list[str]) -> str:
+        app = _join_args(args)
+        if not app:
+            return "Please name the app to install."
+        return system.install_app(app)
+
+    def _move_window(self, args: list[str]) -> str:
+        title, numbers = _split_title_and_numbers(args)
+        if not title or len(numbers) < 2:
+            return (
+                "Please provide a window title and coordinates "
+                "(e.g. MOVE_WINDOW:Notepad:100:100)."
+            )
+        x, y = numbers[0], numbers[1]
+        width = numbers[2] if len(numbers) >= 4 else None
+        height = numbers[3] if len(numbers) >= 4 else None
+        return system.move_window(title, x, y, width, height)
+
+    def _move_window_to_monitor(self, args: list[str]) -> str:
+        title, numbers = _split_title_and_numbers(args)
+        if not title or not numbers:
+            return "Please provide a window title and monitor index."
+        return system.move_window_to_monitor(title, numbers[-1])
+
     # ---- Tasks ----
 
     def _add_task(self, args: list[str]) -> str:
@@ -438,6 +630,8 @@ class ExecutiveOfficer:
             if self._notifier is not None:
                 for message in self._fire_due_timers():
                     self._notifier(message)
+                for message in self._fire_due_scheduled():
+                    self._notifier(message)
 
     # ---- Reporting ----
 
@@ -472,6 +666,7 @@ class ExecutiveOfficer:
                     loaded = json.load(f)
                 self.state["tasks"] = list(loaded.get("tasks", self.state["tasks"]))
                 self.state["timers"] = list(loaded.get("timers", self.state["timers"]))
+                self.state["scheduled"] = list(loaded.get("scheduled", self.state["scheduled"]))
         except (OSError, ValueError):
             pass
 
@@ -507,6 +702,7 @@ class ExecutiveOfficer:
             "processes": system.list_processes(8),
             "tasks": list(self.state["tasks"]),
             "timers": list(self.state["timers"]),
+            "scheduled": list(self.state["scheduled"]),
         }
 
 
@@ -532,6 +728,61 @@ def _first_two_ints(args: list[str]) -> tuple[int, int] | None:
 def _join_args(args: list[str]) -> str:
     """Rejoins colon-split args (paths like C:\\Users survive [ACTION:...])."""
     return ":".join(args)
+
+
+def _parse_schedule(args: list[str]) -> tuple[str, float] | None:
+    """Parses [ACTION:SCHEDULE_TASK:...] args into (command, epoch) or None.
+
+    Supported formats:
+    - SCHEDULE_TASK:command:HH:MM          -> next occurrence of that time
+    - SCHEDULE_TASK:command:in:N:minutes    -> N units from now
+    """
+    if not args:
+        return None
+    if "in" in args:
+        split = args.index("in")
+        command = ":".join(args[:split])
+        spec = args[split + 1:]
+        if not command or len(spec) < 2 or not spec[0].isdigit():
+            return None
+        seconds = _timer_seconds(int(spec[0]), " ".join(spec[1:]))
+        return command, time.time() + seconds
+    if len(args) >= 3 and args[-2].isdigit() and args[-1].isdigit():
+        hour, minute = int(args[-2]), int(args[-1])
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            now = time.localtime()
+            at = time.mktime(
+                (now.tm_year, now.tm_mon, now.tm_mday, hour, minute, 0, 0, 0, -1)
+            )
+            if at <= time.time():
+                at = time.mktime(
+                    (
+                        now.tm_year,
+                        now.tm_mon,
+                        now.tm_mday + 1,
+                        hour,
+                        minute,
+                        0,
+                        0,
+                        0,
+                        -1,
+                    )
+                )
+            return ":".join(args[:-2]), at
+    return None
+
+
+def _split_title_and_numbers(args: list[str]) -> tuple[str, list[int]]:
+    """Splits window args into a title and trailing integers."""
+    numbers: list[int] = []
+    title_parts: list[str] = []
+    for part in args:
+        match = re.fullmatch(r"-?\d+", part)
+        if match is not None:
+            numbers.append(int(part))
+        else:
+            title_parts.append(part)
+    return ":".join(title_parts), numbers
 
 
 def _timer_seconds(value: int, raw: str) -> int:

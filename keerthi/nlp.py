@@ -39,6 +39,24 @@ COMMAND_INTENTS = {
     "CLOSE_WINDOW": "Close a window (e.g. CLOSE_WINDOW:Notepad).",
     "OPEN_URL": "Open a URL in the default browser (e.g. OPEN_URL:https://example.com).",
     "WEB_SEARCH": "Search the web in the default browser (e.g. WEB_SEARCH:best AI models).",
+    "SAVE_FACT": "Save a user fact to long-term memory (e.g. SAVE_FACT:user prefers dark mode).",
+    "LIST_FACTS": "List the facts KEERTHI has saved about the user.",
+    "MACRO_RECORD": "Start recording a keyboard/mouse macro (e.g. MACRO_RECORD:demo).",
+    "MACRO_STOP": "Stop the active macro recording and save it.",
+    "MACRO_REPLAY": "Replay a recorded macro (e.g. MACRO_REPLAY:demo).",
+    "MACRO_LIST": "List the recorded macros.",
+    "MACRO_DELETE": "Delete a recorded macro (e.g. MACRO_DELETE:demo).",
+    "SCHEDULE_TASK": (
+        "Schedule a command to run later (e.g. SCHEDULE_TASK:notepad:10:30 "
+        "or SCHEDULE_TASK:notepad:in:5:minutes)."
+    ),
+    "CANCEL_SCHEDULED": "Cancel a scheduled task by index (e.g. CANCEL_SCHEDULED:0).",
+    "LIST_SCHEDULED": "Report all scheduled tasks.",
+    "INSTALL_APP": "Install an app with winget (e.g. INSTALL_APP:7zip).",
+    "MOVE_WINDOW": "Move a window to screen coordinates (e.g. MOVE_WINDOW:Notepad:100:100).",
+    "MOVE_WINDOW_TO_MONITOR": (
+        "Move a window to another monitor (e.g. MOVE_WINDOW_TO_MONITOR:Notepad:1)."
+    ),
 }
 
 SAFETY_INTENTS = frozenset(
@@ -56,6 +74,9 @@ SAFETY_INTENTS = frozenset(
         "SLEEP",
         "LOCK_SCREEN",
         "CLOSE_WINDOW",
+        "MACRO_REPLAY",
+        "SCHEDULE_TASK",
+        "INSTALL_APP",
     }
 )
 

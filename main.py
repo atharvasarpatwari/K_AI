@@ -11,6 +11,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from keerthi.brain import KeerthiBrain
 from keerthi.config import CONFIG, validate_config
 from keerthi.executive import ExecutiveOfficer
+from keerthi.logsetup import setup_file_logging
 from keerthi.peripherals import PeripheralController, console
 
 EXIT_PHRASES = ("exit", "quit", "shutdown")
@@ -25,6 +26,7 @@ def setup_logging() -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+    setup_file_logging()
 
 
 def _enable_unicode_console() -> None:
@@ -56,6 +58,11 @@ def parse_args() -> argparse.Namespace:
         "--fresh",
         action="store_true",
         help="Ignore saved tasks/timers and start from defaults.",
+    )
+    parser.add_argument(
+        "--tray",
+        action="store_true",
+        help="Show a system tray icon while running (Windows, optional pystray).",
     )
     parser.add_argument(
         "--version",
@@ -157,6 +164,14 @@ def main() -> None:
     peripherals = PeripheralController()
     officer.set_notifier(peripherals.speak)
     officer.set_vision_provider(brain.describe_image)
+
+    if args.tray:
+        from keerthi.tray import start_tray
+
+        if start_tray():
+            console.print("Tray icon enabled. [OK]")
+        else:
+            console.print("[yellow]pystray not installed — tray icon skipped.[/yellow]")
 
     session = ConversationSession(
         brain=brain,

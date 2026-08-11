@@ -11,3 +11,5 @@ Pillow
 pywin32; sys_platform == "win32"
 pycaw; sys_platform == "win32"
 comtypes; sys_platform == "win32"
+pynput; sys_platform == "win32"
+pystray; sys_platform == "win32"

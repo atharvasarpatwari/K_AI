@@ -33,6 +33,7 @@ COMMAND_MAX_OUTPUT = 4000
 CPU_SAMPLE_SECONDS = 0.1
 POWER_COMMAND_TIMEOUT_SECONDS = 15
 BRIGHTNESS_TIMEOUT_SECONDS = 15
+WINGET_TIMEOUT_SECONDS = 300
 SCREENSHOT_FILENAME_FORMAT = "%Y%m%d-%H%M%S"
 
 _APP_LAUNCHERS: dict[str, list[str]] = {
@@ -567,6 +568,144 @@ def close_window(title: str) -> str:
         return f"Closing '{title}'."
     except Exception:
         return f"Could not close '{title}'."
+
+
+def list_monitors() -> list[dict[str, Any]]:
+    """Returns monitor geometry (index, bounds, primary flag) via the Win32 API."""
+    if os.name != "nt":
+        return []
+    import ctypes
+    from ctypes import wintypes
+
+    class MONITORINFO(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD),
+            ("rcMonitor", wintypes.RECT),
+            ("rcWork", wintypes.RECT),
+            ("dwFlags", wintypes.DWORD),
+        ]
+
+    MONITORINFOF_PRIMARY = 1
+    monitors: list[dict[str, Any]] = []
+    user32 = ctypes.windll.user32
+
+    def _enum_proc(monitor: Any, _dc: Any, _rect: Any, _data: Any) -> bool:
+        info = MONITORINFO()
+        info.cbSize = ctypes.sizeof(MONITORINFO)
+        if user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
+            rect = info.rcMonitor
+            monitors.append(
+                {
+                    "index": len(monitors),
+                    "left": int(rect.left),
+                    "top": int(rect.top),
+                    "width": int(rect.right - rect.left),
+                    "height": int(rect.bottom - rect.top),
+                    "primary": bool(info.dwFlags & MONITORINFOF_PRIMARY),
+                }
+            )
+        return True
+
+    MONITORENUMPROC = ctypes.WINFUNCTYPE(
+        ctypes.c_bool,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+    )
+    with suppress(Exception):
+        user32.EnumDisplayMonitors(None, None, MONITORENUMPROC(_enum_proc), None)
+    return monitors
+
+
+def move_window(
+    title: str,
+    x: int,
+    y: int,
+    width: int | None = None,
+    height: int | None = None,
+) -> str:
+    """Moves (and optionally resizes) a window to the given screen coordinates."""
+    win32gui, _win32con = _load_win32()
+    if win32gui is None:
+        return "Window management is only supported on Windows."
+    hwnd = _find_window(title)
+    if hwnd is None:
+        return f"No open window matches '{title}'."
+    try:
+        rect = win32gui.GetWindowRect(hwnd)
+        w = int(width) if width is not None else rect[2] - rect[0]
+        h = int(height) if height is not None else rect[3] - rect[1]
+        win32gui.SetWindowPos(hwnd, 0, x, y, w, h, 0x0040)  # SWP_SHOWWINDOW
+        return f"Moved '{title}' to ({x}, {y})."
+    except Exception:
+        return f"Could not move '{title}'."
+
+
+def move_window_to_monitor(title: str, monitor_index: int) -> str:
+    """Moves a window to the centre of the given monitor."""
+    win32gui, _win32con = _load_win32()
+    if win32gui is None:
+        return "Window management is only supported on Windows."
+    monitors = list_monitors()
+    if not monitors:
+        return "No monitors detected."
+    monitor = next((m for m in monitors if m["index"] == monitor_index), None)
+    if monitor is None:
+        return f"No monitor at index {monitor_index}."
+    hwnd = _find_window(title)
+    if hwnd is None:
+        return f"No open window matches '{title}'."
+    try:
+        rect = win32gui.GetWindowRect(hwnd)
+        w = rect[2] - rect[0]
+        h = rect[3] - rect[1]
+        x = monitor["left"] + max(0, (monitor["width"] - w) // 2)
+        y = monitor["top"] + max(0, (monitor["height"] - h) // 2)
+        win32gui.SetWindowPos(hwnd, 0, x, y, w, h, 0x0040)
+        return f"Moved '{title}' to monitor {monitor_index}."
+    except Exception:
+        return f"Could not move '{title}' to monitor {monitor_index}."
+
+
+# ---- Software installation ----
+
+def install_app(name: str) -> str:
+    """Installs an app via winget (Windows only)."""
+    app = name.strip()
+    if not app:
+        return "No app name given to install."
+    if os.name != "nt":
+        return "Installing apps is only supported on Windows."
+    try:
+        completed = subprocess.run(
+            [
+                "winget",
+                "install",
+                "--name",
+                app,
+                "--accept-package-agreements",
+                "--accept-source-agreements",
+                "--disable-interactivity",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=WINGET_TIMEOUT_SECONDS,
+            errors="replace",
+        )
+    except FileNotFoundError:
+        return "winget is not available on this system."
+    except subprocess.TimeoutExpired:
+        return f"The winget install timed out after {WINGET_TIMEOUT_SECONDS}s."
+    except OSError as exc:
+        return f"Could not run winget: {exc}"
+    output = ((completed.stdout or "") + (completed.stderr or "")).strip()
+    summary = output[:600].replace("\n", " ")
+    if completed.returncode == 0:
+        message = f"Installed {app}."
+        return f"{message} {summary}" if summary else message
+    reason = summary or f"exit code {completed.returncode}"
+    return f"Could not install '{app}': {reason}."
 
 
 # ---- Browser ----
