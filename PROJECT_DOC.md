@@ -1,6 +1,6 @@
 # KEERTHI AI — Project Documentation (for review)
 
-**Document date:** 2026-08-10 · **Version:** 2.4.0 · **Language:** Python 3.13
+**Document date:** 2026-08-10 · **Version:** 3.0.0 · **Language:** Python 3.13
 
 ---
 
@@ -51,6 +51,15 @@ E:\KeerthiAI\
 │   └── index.css
 ├── KEERTHI_Technical_Report (Repaired).docx   Original project report (untouched)
 ├── keerthi_state.json            Created at runtime (task/timer persistence)
+├── KeerthiAndroid/               Native Android client (Kotlin + Jetpack Compose)
+│   ├── app/src/main/java/com/keerthi/ai/
+│   │   ├── MainActivity.kt       Bottom-nav shell: Chat / Dashboard / Settings
+│   │   ├── data/                 KeerthiState model, DataStore persistence, ViewModel
+│   │   ├── brain/                SystemPrompt, GeminiClient, ActionEngine, AlarmScheduler
+│   │   ├── services/             BroadcastReceivers: timers, scheduled tasks, boot, device admin
+│   │   ├── ui/                   Compose screens + theme
+│   │   └── utils/                SystemInfo (battery/mem/disk), TtsManager
+│   └── README.md                 Android-specific docs (real vs. simulated actions)
 └── keerthi/
     ├── __init__.py               Empty package marker
     ├── config.py                 CONFIG TypedDict, env helpers, validate_config()
@@ -65,7 +74,7 @@ E:\KeerthiAI\
         └── weather.py            Open-Meteo weather lookup (geocode + current conditions)
 ```
 
-`tests/` contains 13 test modules (208 tests, stdlib `unittest`).
+`tests/` contains 16 test modules (276 tests, stdlib `unittest`).
 
 ---
 
@@ -327,7 +336,7 @@ All optional — read from `.env` (see `.env.example`), with defaults shown:
 python main.py                # run (mic → text fallback)
 python main.py --text         # force text input
 python main.py --fresh        # start with default state (ignore saved)
-python main.py --version      # print "KEERTHI v2.4.0" and exit
+python main.py --version      # print "KEERTHI v3.0.0" and exit
 ```
 
 In-session commands: `exit` / `quit` / `shutdown` (power down), `/reset`
@@ -393,12 +402,35 @@ Example model output: `"Your CPU is at 42%. [ACTION:CPU_USAGE]"`
 - `--fresh` forces a clean start (`load_state=False`).
 - The file is git-ignored (runtime data, may contain no secrets but is user-local).
 
+### 8.1 Android Client (`KeerthiAndroid/`)
+
+A standalone native rebuild of KEERTHI for phones — Kotlin 1.9.24, Jetpack Compose
+(Material 3), min SDK 26 / target+compile SDK 34, Gradle 8.7 wrapper checked in.
+
+- **Brain**: calls the Gemini REST API (`gemini-2.0-flash`) directly from the device;
+  the key is entered in the app's Settings tab and stored only in DataStore.
+- **Protocol**: same persona + `[ACTION:NAME:args]` command library as the desktop app
+  (`data/Models.kt` mirrors the action manifest; safety-gated actions show a manual
+  confirm/cancel card in chat).
+- **Real device integrations**: timers & scheduled reminders via `AlarmManager` exact
+  alarms + high-priority notifications (re-armed after reboot by `BootReceiver`), tasks,
+  memory facts, macro record/replay, installed-app launching (`PackageManager`), URL /
+  web search / Play Store intents, media volume (`AudioManager`), brightness (needs
+  Write Settings), screen lock (Device Admin `lockNow()`), weather (Open-Meteo),
+  voice in/out (`SpeechRecognizer` intent + `TextToSpeech`).
+- **Honest refusals**: process killing, shell commands, input simulation, screenshots,
+  power control are impossible on stock Android — the assistant says so instead of faking.
+  Window management is tracked on an in-app "virtual desktop" for continuity.
+- **Persistence**: whole `KeerthiState` serialized to Jetpack DataStore preferences.
+- Build: `gradlew assembleDebug`; CI runs it on ubuntu-latest. Verified on a real device
+  (Realme RMX5264). See `KeerthiAndroid/README.md`.
+
 ---
 
 ## 9. Testing
 
-Run: `python -m unittest discover -s tests -v` (stdlib, no extra deps). **208 tests, all passing.**
-Frontend: `npm test` (vitest + Testing Library, 7 tests), `npm run lint` (tsc), `npm run build`.
+Run: `python -m unittest discover -s tests -v` (stdlib, no extra deps). **276 tests, all passing.**
+Frontend: `npm test` (vitest + Testing Library, 12 tests), `npm run lint` (tsc), `npm run build`.
 
 | File                  | # Tests | Covers                                                         |
 | --------------------- | ------- | -------------------------------------------------------------- |
@@ -498,6 +530,20 @@ fully mocked in `test_brain.py` and `test_server.py`.
 - **Input automation**: `TYPE_TEXT`, `PRESS_KEYS`, `MOVE_MOUSE`, `CLICK_MOUSE`,
   `SCROLL_MOUSE` via `pyautogui` (lazy-loaded, all `[SAFETY]`), with a
   clipboard-paste fallback for untypable text.
+
+**Round 8 — v3.0.0:**
+- **Streaming chat**: `/api/ws` streams text deltas; server + frontend share one
+  extract-and-execute pipeline.
+- **Security & reliability**: optional `KEERTHI_API_TOKEN` auth, rotating file logs,
+  Gemini retry/backoff, degraded no-key replies, richer `/api/health`.
+- **Voice & screenshots in the browser**: client Web Speech TTS/STT (PCM fallback),
+  inline screenshot previews in chat.
+- **Memory & smarts**: persistent fact store (`keerthi_memory.json`), `SAVE_FACT`/
+  `LIST_FACTS`, optional function-calling mode, dashboard Memory panel.
+- **Deeper automation**: macro record/replay (pynput/pyautogui), scheduled tasks
+  (HH:MM or `in:N:unit`), winget app installs, monitor-aware window moves, opt-in
+  system tray (`--tray`).
+- **PWA**: installable dashboard, service worker offline shell, 192/512 icons.
 - **Screen analysis**: `TAKE_SCREENSHOT` saves PNGs to `SCREENSHOT_DIR`;
   `READ_SCREEN` feeds the capture to Gemini vision
   (`KeerthiBrain.describe_image`) via a provider wired in `main.py`/`server.py`;
