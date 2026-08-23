@@ -21,3 +21,11 @@ venv/
 .ruff_cache/
 .mypy_cache/
 .pytest_cache/
+
+# Android (KeerthiAndroid)
+KeerthiAndroid/.gradle/
+KeerthiAndroid/local.properties
+KeerthiAndroid/app/build/
+KeerthiAndroid/build/
+KeerthiAndroid/.idea/
+KeerthiAndroid/captures/
