@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="keerthi_ai_logo.svg" alt="keerthi_ai" width="440" />
+</p>
+
 # KEERTHI AI — Voice Assistant
 
 **K**nowledge-**E**nhanced **E**ngine for **R**eal-**T**ime **H**uman **I**ntelligence.

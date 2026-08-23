@@ -1,0 +1,29 @@
+<svg viewBox="0 0 920 300" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="plumGrad" cx="35%" cy="30%" r="80%">
+      <stop offset="0%" stop-color="#4E3547"/>
+      <stop offset="100%" stop-color="#3A2733"/>
+    </radialGradient>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#D4A857"/>
+      <stop offset="100%" stop-color="#A97A31"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Icon mark -->
+  <g>
+    <circle cx="150" cy="150" r="128" fill="url(#plumGrad)" stroke="url(#goldGrad)" stroke-width="2.5"/>
+    <!-- monogram K, hand-set -->
+    <text x="139" y="205" font-family="Georgia, 'Times New Roman', serif" font-size="150" font-weight="600" fill="#FAF1E6" text-anchor="middle">K</text>
+    <!-- spark accent, doubles as the dot of a lit flame -->
+    <g transform="translate(216,78) rotate(12)">
+      <path d="M0,-20 C3,-7 7,-3 20,0 C7,3 3,7 0,20 C-3,7 -7,3 -20,0 C-7,-3 -3,-7 0,-20 Z" fill="url(#goldGrad)"/>
+    </g>
+  </g>
+
+  <!-- Wordmark -->
+  <g>
+    <text x="330" y="190" font-family="Georgia, 'Times New Roman', serif" font-size="88" fill="#3A2733">keerthi</text>
+    <text x="672" y="190" font-family="'Courier New', 'JetBrains Mono', monospace" font-size="62" fill="#B4863C" letter-spacing="1">_ai</text>
+  </g>
+</svg>
