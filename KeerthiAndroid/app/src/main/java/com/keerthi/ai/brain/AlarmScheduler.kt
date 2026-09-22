@@ -16,6 +16,7 @@ object AlarmScheduler {
 
     fun scheduleTimer(context: Context, timer: TimerItem) {
         val intent = Intent(context, TimerReceiver::class.java).apply {
+            putExtra("id", timer.id)
             putExtra("label", timer.label)
             putExtra("notifId", timer.id.hashCode())
         }
@@ -37,6 +38,7 @@ object AlarmScheduler {
 
     fun scheduleTask(context: Context, item: ScheduledItem) {
         val intent = Intent(context, ScheduledTaskReceiver::class.java).apply {
+            putExtra("id", item.id)
             putExtra("cmd", item.cmd)
             putExtra("notifId", item.id.hashCode())
         }

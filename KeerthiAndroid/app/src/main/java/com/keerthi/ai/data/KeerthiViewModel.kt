@@ -51,6 +51,16 @@ class KeerthiViewModel(application: Application) : AndroidViewModel(application)
         it.copy(chat = if (next.size > 40) next.takeLast(40) else next)
     }
 
+    /** Appends [piece] to the chat message at [index] without persisting — used while a
+     *  reply is still streaming in; the caller persists once after the stream finishes. */
+    private fun appendChatChunk(index: Int, piece: String) {
+        val chat = _state.value.chat
+        if (index !in chat.indices) return
+        _state.value = _state.value.copy(
+            chat = chat.mapIndexed { i, m -> if (i == index) m.copy(text = m.text + piece) else m }
+        )
+    }
+
     // ---- tasks ----
     fun addTask(text: String): String {
         if (text.isBlank()) return "need a task description"
@@ -231,9 +241,21 @@ class KeerthiViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             _thinking.value = true
             val prompt = SystemPrompt.build(_state.value.facts)
-            val reply = GeminiClient.send(_state.value.apiKey, prompt, _state.value.chat)
-            addChat("assistant", reply)
-            _thinking.value = false
+            val history = _state.value.chat
+            var replyIndex = -1
+            val reply = GeminiClient.stream(_state.value.apiKey, prompt, history) { chunk ->
+                if (replyIndex == -1) {
+                    addChat("assistant", "")
+                    replyIndex = _state.value.chat.size - 1
+                    _thinking.value = false
+                }
+                appendChatChunk(replyIndex, chunk)
+            }
+            if (replyIndex == -1) {
+                addChat("assistant", reply)
+                _thinking.value = false
+            }
+            persist()
             onAssistantReply(reply)
         }
     }

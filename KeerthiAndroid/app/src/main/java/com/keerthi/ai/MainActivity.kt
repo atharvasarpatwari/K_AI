@@ -7,6 +7,11 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -48,6 +53,9 @@ class MainActivity : ComponentActivity() {
         val needed = mutableListOf<String>()
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             needed.add(Manifest.permission.RECORD_AUDIO)
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            needed.add(Manifest.permission.ACCESS_COARSE_LOCATION)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -98,10 +106,16 @@ private fun KeerthiApp(vm: KeerthiViewModel) {
         }
     ) { padding ->
         Box(modifier = Modifier.fillMaxSize().padding(padding).background(Bg)) {
-            when (tab) {
-                Tab.CHAT -> ChatScreen(vm)
-                Tab.DASH -> DashboardScreen(vm)
-                Tab.SETTINGS -> SettingsScreen(vm)
+            AnimatedContent(
+                targetState = tab,
+                transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(180)) },
+                label = "tab"
+            ) { current ->
+                when (current) {
+                    Tab.CHAT -> ChatScreen(vm)
+                    Tab.DASH -> DashboardScreen(vm)
+                    Tab.SETTINGS -> SettingsScreen(vm)
+                }
             }
         }
     }

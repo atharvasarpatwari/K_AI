@@ -1,5 +1,7 @@
 package com.keerthi.ai.ui
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -197,6 +199,11 @@ private fun StatRow(label: String, value: String) {
 
 @Composable
 private fun ProgressBar(pct: Int, color: androidx.compose.ui.graphics.Color) {
+    val animatedFraction by animateFloatAsState(
+        targetValue = pct / 100f,
+        animationSpec = tween(600),
+        label = "progress"
+    )
     Box(
         modifier = Modifier
             .fillMaxWidth().height(6.dp)
@@ -205,7 +212,7 @@ private fun ProgressBar(pct: Int, color: androidx.compose.ui.graphics.Color) {
     ) {
         Box(
             modifier = Modifier
-                .fillMaxWidth(pct / 100f)
+                .fillMaxWidth(animatedFraction)
                 .fillMaxHeight()
                 .clip(RoundedCornerShape(3.dp))
                 .background(color)

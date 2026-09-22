@@ -11,6 +11,7 @@ import android.provider.Settings
 import com.keerthi.ai.data.KeerthiViewModel
 import com.keerthi.ai.data.SAFETY_ACTIONS
 import com.keerthi.ai.services.KeerthiDeviceAdminReceiver
+import com.keerthi.ai.utils.LocationInfo
 import com.keerthi.ai.utils.SystemInfo
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -57,7 +58,7 @@ object ActionEngine {
                 "REMOVE_TASK" -> vm.removeTaskByName(args)
                 "STATUS_REPORT" -> "${SystemInfo.batterySummary(context)} · ${vm.state.value.tasks.size} open task(s) · ${vm.state.value.timers.size} timer(s) running"
 
-                "WEATHER_REPORT" -> weatherReport()
+                "WEATHER_REPORT" -> weatherReport(context)
 
                 "TYPE_TEXT" -> "Typing into other apps needs an Accessibility Service, which this app does not request to stay Play Store safe — nothing was typed."
                 "PRESS_KEYS" -> "Simulated key presses need an Accessibility Service, which this app does not request — nothing was pressed."
@@ -151,22 +152,27 @@ object ActionEngine {
         return if (names.isEmpty()) "Downloads folder is empty or inaccessible" else names.joinToString(", ")
     }
 
-    private suspend fun weatherReport(): String = withContext(Dispatchers.IO) {
+    private suspend fun weatherReport(context: Context): String = withContext(Dispatchers.IO) {
         try {
-            val geoReq = Request.Builder()
-                .url("https://geocoding-api.open-meteo.com/v1/search?name=Hyderabad&count=1")
-                .build()
-            val geoBody = http.newCall(geoReq).execute().use { it.body?.string() } ?: return@withContext fallbackWeather()
-            val results = JSONObject(geoBody).optJSONArray("results") ?: return@withContext fallbackWeather()
-            if (results.length() == 0) return@withContext fallbackWeather()
-            val g = results.getJSONObject(0)
-            val lat = g.getDouble("latitude"); val lon = g.getDouble("longitude")
+            val fix = LocationInfo.lastKnown(context)
+            val (lat, lon, name) = if (fix != null) {
+                Triple(fix.latitude, fix.longitude, LocationInfo.placeName(context, fix))
+            } else {
+                val geoReq = Request.Builder()
+                    .url("https://geocoding-api.open-meteo.com/v1/search?name=Hyderabad&count=1")
+                    .build()
+                val geoBody = http.newCall(geoReq).execute().use { it.body?.string() } ?: return@withContext fallbackWeather()
+                val results = JSONObject(geoBody).optJSONArray("results") ?: return@withContext fallbackWeather()
+                if (results.length() == 0) return@withContext fallbackWeather()
+                val g = results.getJSONObject(0)
+                Triple(g.getDouble("latitude"), g.getDouble("longitude"), g.getString("name"))
+            }
             val wxReq = Request.Builder()
                 .url("https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon&current=temperature_2m,relative_humidity_2m,wind_speed_10m")
                 .build()
             val wxBody = http.newCall(wxReq).execute().use { it.body?.string() } ?: return@withContext fallbackWeather()
             val c = JSONObject(wxBody).getJSONObject("current")
-            "${g.getString("name")}: ${c.getDouble("temperature_2m")}°C, humidity ${c.getInt("relative_humidity_2m")}%, wind ${c.getDouble("wind_speed_10m")} km/h"
+            "$name: ${c.getDouble("temperature_2m")}°C, humidity ${c.getInt("relative_humidity_2m")}%, wind ${c.getDouble("wind_speed_10m")} km/h"
         } catch (e: Exception) {
             fallbackWeather()
         }
