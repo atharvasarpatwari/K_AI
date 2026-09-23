@@ -176,7 +176,7 @@ class TestKeerthiBrain(unittest.TestCase):
         first = mock.MagicMock()
         first.text = "Par"
         second = mock.MagicMock()
-        second.text = "Parts"
+        second.text = "ts"
         brain.client.models.generate_content_stream.side_effect = [
             errors.APIError(429, {"error": {"message": "limited"}}),
             iter([first, second]),
