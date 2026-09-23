@@ -7,6 +7,7 @@ import android.content.IntentFilter
 import android.os.BatteryManager
 import android.os.StatFs
 import android.os.Environment
+import java.util.Locale
 
 object SystemInfo {
 
@@ -25,7 +26,7 @@ object SystemInfo {
         am.getMemoryInfo(info)
         val usedGb = (info.totalMem - info.availMem) / 1e9
         val totalGb = info.totalMem / 1e9
-        return String.format("%.1f GB / %.1f GB (%d%%)", usedGb, totalGb, memoryPercent(context))
+        return String.format(Locale.US, "%.1f GB / %.1f GB (%d%%)", usedGb, totalGb, memoryPercent(context))
     }
 
     fun diskPercent(): Int {
@@ -42,7 +43,7 @@ object SystemInfo {
         val free = stat.availableBlocksLong * stat.blockSizeLong
         val usedGb = (total - free) / 1e9
         val totalGb = total / 1e9
-        return String.format("%.1f GB / %.1f GB (%d%%)", usedGb, totalGb, diskPercent())
+        return String.format(Locale.US, "%.1f GB / %.1f GB (%d%%)", usedGb, totalGb, diskPercent())
     }
 
     fun batteryPercentAndCharging(context: Context): Pair<Int, Boolean> {

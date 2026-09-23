@@ -35,7 +35,7 @@ fun DashboardScreen(vm: KeerthiViewModel) {
     val context = LocalContext.current
     val state by vm.state.collectAsState()
     val scope = rememberCoroutineScope()
-    var tick by remember { mutableStateOf(0L) }
+    var tick by remember { mutableLongStateOf(0L) }
 
     LaunchedEffect(Unit) {
         while (true) { delay(1000); tick = System.currentTimeMillis() }

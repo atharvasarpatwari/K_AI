@@ -3,7 +3,6 @@ package com.keerthi.ai.services
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
-import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 
@@ -12,16 +11,15 @@ object NotificationHelper {
     private const val CHANNEL_NAME = "KEERTHI Alerts"
 
     fun ensureChannel(context: Context) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val mgr = context.getSystemService(NotificationManager::class.java)
-            val existing = mgr.getNotificationChannel(CHANNEL_ID)
-            if (existing == null) {
-                val channel = NotificationChannel(
-                    CHANNEL_ID, CHANNEL_NAME, NotificationManager.IMPORTANCE_HIGH
-                )
-                channel.description = "Timers, scheduled tasks and reminders from KEERTHI"
-                mgr.createNotificationChannel(channel)
-            }
+        // minSdk is already 26 (O), so notification channels always exist on this app.
+        val mgr = context.getSystemService(NotificationManager::class.java)
+        val existing = mgr.getNotificationChannel(CHANNEL_ID)
+        if (existing == null) {
+            val channel = NotificationChannel(
+                CHANNEL_ID, CHANNEL_NAME, NotificationManager.IMPORTANCE_HIGH
+            )
+            channel.description = "Timers, scheduled tasks and reminders from KEERTHI"
+            mgr.createNotificationChannel(channel)
         }
     }
 
