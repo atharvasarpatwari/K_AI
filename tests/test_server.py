@@ -39,6 +39,11 @@ class TestServerEndpoints(unittest.TestCase):
         server._pending_confirmations.clear()
         server._clients.clear()
         server._memory = None
+        # Tests assume a configured key by default; the one test that exercises
+        # the missing-key path overrides this within its own narrower patch.
+        api_key_patch = mock.patch.dict(CONFIG, {"GEMINI_API_KEY": "test-key"})
+        api_key_patch.start()
+        self.addCleanup(api_key_patch.stop)
         self.client = TestClient(server.app)
 
     def tearDown(self):
