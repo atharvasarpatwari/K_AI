@@ -186,7 +186,8 @@ class TestFileHelpers(unittest.TestCase):
         listing = system.list_directory("Z:\\definitely\\missing")
         self.assertIn("error", listing)
 
-    @mock.patch("keerthi.system.os.startfile")
+    @mock.patch("keerthi.system.os.name", "nt")
+    @mock.patch("keerthi.system.os.startfile", create=True)
     def test_open_file(self, startfile_mock):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "a.txt")
