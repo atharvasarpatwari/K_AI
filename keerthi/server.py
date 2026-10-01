@@ -9,6 +9,7 @@ State lives in-process (module singletons), so run a single worker:
 """
 
 import asyncio
+import hmac
 import json
 import logging
 import threading
@@ -47,7 +48,9 @@ logger = logging.getLogger(__name__)
 
 def _is_authorized(token: str | None) -> bool:
     expected = CONFIG["KEERTHI_API_TOKEN"]
-    return not expected or bool(token) and token == expected
+    if not expected:
+        return True
+    return token is not None and hmac.compare_digest(token, expected)
 
 
 async def require_token(

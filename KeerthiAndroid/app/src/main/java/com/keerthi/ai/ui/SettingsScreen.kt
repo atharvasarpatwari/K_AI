@@ -2,6 +2,7 @@ package com.keerthi.ai.ui
 
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -87,8 +88,11 @@ fun SettingsScreen(vm: KeerthiViewModel) {
                 context.startActivity(intent)
             }
             PermRow("Exact alarms", "needed for precise timers on Android 12+") {
-                val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM)
-                context.startActivity(intent)
+                // ACTION_REQUEST_SCHEDULE_EXACT_ALARM only exists from API 31 — below that
+                // it resolves to nothing and startActivity throws ActivityNotFoundException.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    context.startActivity(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM))
+                }
             }
         }
 

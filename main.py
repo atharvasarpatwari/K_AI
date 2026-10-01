@@ -30,10 +30,20 @@ def setup_logging() -> None:
 
 
 def _enable_unicode_console() -> None:
-    """Switch the Windows console to UTF-8 so unicode renders correctly."""
+    """Switch the Windows console to UTF-8 so unicode renders correctly.
+
+    `chcp 65001` alone only changes the console's codepage — Python's own
+    stdout/stderr encoding is already locked in at interpreter startup, so
+    without reconfiguring those streams directly, any emoji, em dash, or
+    non-Latin text (a Gemini reply, a window title) still crashes with
+    UnicodeEncodeError.
+    """
     if os.name == "nt":
         with suppress(Exception):
             os.system("chcp 65001 > nul")
+        with suppress(Exception):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
 
 
 def boot_sequence() -> None:
@@ -148,9 +158,9 @@ class ConversationSession:
 
 def main() -> None:
     args = parse_args()
+    _enable_unicode_console()
     setup_logging()
     validate_config()
-    _enable_unicode_console()
     boot_sequence()
 
     try:

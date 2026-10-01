@@ -16,6 +16,7 @@ ignore = []
 
 [tool.mypy]
 python_version = "3.11"
+platform = "win32"
 strict = true
 files = ["keerthi", "main.py"]
 exclude = ["node_modules"]

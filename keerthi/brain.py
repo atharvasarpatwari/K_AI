@@ -188,11 +188,10 @@ Host: (injected live via state)
         full = ""
         try:
             for chunk in self._iter_stream():
-                text = chunk.text or ""
-                delta = text[len(full):] if len(text) > len(full) else text
+                delta = chunk.text or ""
                 if delta:
                     yield delta
-                full = text
+                    full += delta
                 if CONFIG["USE_FUNCTION_CALLING"]:
                     for call in getattr(chunk, "function_calls", None) or []:
                         tag = _call_to_action(call)

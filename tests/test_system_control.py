@@ -225,17 +225,17 @@ class TestPowerAndDisplay(unittest.TestCase):
         return mock.patch("keerthi.system.subprocess.run")
 
     def test_shutdown_system(self):
-        with self._patch_run() as run:
+        with mock.patch("keerthi.system.os.name", "nt"), self._patch_run() as run:
             self.assertEqual(system.shutdown_system(), "Shutdown scheduled.")
         self.assertEqual(run.call_args.args[0], ["shutdown", "/s", "/t", "5"])
 
     def test_restart_system(self):
-        with self._patch_run() as run:
+        with mock.patch("keerthi.system.os.name", "nt"), self._patch_run() as run:
             self.assertEqual(system.restart_system(), "Restart scheduled.")
         self.assertEqual(run.call_args.args[0], ["shutdown", "/r", "/t", "5"])
 
     def test_sleep_system(self):
-        with self._patch_run() as run:
+        with mock.patch("keerthi.system.os.name", "nt"), self._patch_run() as run:
             self.assertEqual(system.sleep_system(), "Sleeping.")
         self.assertEqual(
             run.call_args.args[0],
@@ -243,7 +243,7 @@ class TestPowerAndDisplay(unittest.TestCase):
         )
 
     def test_lock_screen(self):
-        with self._patch_run() as run:
+        with mock.patch("keerthi.system.os.name", "nt"), self._patch_run() as run:
             self.assertEqual(system.lock_screen(), "Locking the screen.")
         self.assertEqual(
             run.call_args.args[0],
@@ -297,7 +297,7 @@ class TestPowerAndDisplay(unittest.TestCase):
 
     def test_set_brightness(self):
         completed = mock.MagicMock(returncode=0)
-        with mock.patch(
+        with mock.patch("keerthi.system.os.name", "nt"), mock.patch(
             "keerthi.system.subprocess.run", return_value=completed
         ) as run:
             self.assertEqual(system.set_brightness(70), "70%")
@@ -306,7 +306,7 @@ class TestPowerAndDisplay(unittest.TestCase):
 
     def test_set_brightness_requires_elevation(self):
         completed = mock.MagicMock(returncode=1)
-        with mock.patch(
+        with mock.patch("keerthi.system.os.name", "nt"), mock.patch(
             "keerthi.system.subprocess.run", return_value=completed
         ):
             result = system.set_brightness(70)
